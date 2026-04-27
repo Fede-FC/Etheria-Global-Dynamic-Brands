@@ -1,0 +1,67 @@
+services:
+
+  # ============================================================
+  #  PostgreSQL — Etheria Global (Sourcing & Logistics)
+  # ============================================================
+  etheria_postgres:
+    image: postgres:16
+    container_name: etheria_global_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: etheria_user
+      POSTGRES_PASSWORD: etheria_pass
+      POSTGRES_DB: etheria_global_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - etheria_data:/var/lib/postgresql/data
+      - ./postgres/01_etheria_global.sql:/docker-entrypoint-initdb.d/01_etheria_global.sql
+      - ./postgres/02_etheria_global_sp_data.sql:/docker-entrypoint-initdb.d/02_etheria_global_sp_data.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U etheria_user -d etheria_global_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - proyecto_network
+
+  # ============================================================
+  #  MySQL — Dynamic Brands (AI-Driven Digital Retail)
+  # ============================================================
+  dynamic_mysql:
+    image: mysql:8.4
+    container_name: dynamic_brands_db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_pass
+      MYSQL_DATABASE: dynamic_brands_db
+      MYSQL_USER: dynamic_user
+      MYSQL_PASSWORD: dynamic_pass
+    ports:
+      - "3306:3306"
+    volumes:
+      - dynamic_data:/var/lib/mysql
+      - ./mysql/01_dynamic_brands.sql:/docker-entrypoint-initdb.d/01_dynamic_brands.sql
+      - ./mysql/02_dynamic_brands_sp_data.sql:/docker-entrypoint-initdb.d/02_dynamic_brands_sp_data.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "dynamic_user", "-pdynamic_pass"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - proyecto_network
+
+# ============================================================
+#  Volúmenes persistentes
+#  Los datos sobreviven aunque apagues los contenedores
+# ============================================================
+volumes:
+  etheria_data:
+  dynamic_data:
+
+# ============================================================
+#  Red interna compartida entre contenedores
+# ============================================================
+networks:
+  proyecto_network:
+    driver: bridge
