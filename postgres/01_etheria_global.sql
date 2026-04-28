@@ -8,19 +8,19 @@
 -- -------------------------------------------------------------
 -- Crear y conectar a la base de datos
 -- -------------------------------------------------------------
-CREATE DATABASE etheria_global_db
-    ENCODING = 'UTF8'
-    LC_COLLATE = 'en_US.UTF-8'
-    LC_CTYPE = 'en_US.UTF-8'
-    TEMPLATE = template0;
-
-\c etheria_global_db;
+-- CREATE DATABASE etheria_global_db
+--     ENCODING = 'UTF8'
+--     LC_COLLATE = 'en_US.UTF-8'
+--     LC_CTYPE = 'en_US.UTF-8'
+--     TEMPLATE = template0;
+-- 
+-- \c etheria_global_db;
 
 -- =============================================================
 -- TABLA: Countries
 -- Países de origen de proveedores y destinos de exportación
 -- =============================================================
-CREATE TABLE Countries (
+CREATE TABLE countries (
     country_id   SERIAL          PRIMARY KEY,
     country_name VARCHAR(100)    NOT NULL UNIQUE,
     iso_code     CHAR(3)         NOT NULL UNIQUE,
@@ -34,7 +34,7 @@ CREATE TABLE Countries (
 -- TABLA: Categories
 -- Categorías de productos (Aceites Esenciales, Cosmética, etc.)
 -- =============================================================
-CREATE TABLE Categories (
+CREATE TABLE categories (
     category_id          SERIAL          PRIMARY KEY,
     category_name        VARCHAR(100)    NOT NULL UNIQUE,
     category_description VARCHAR(200),
@@ -46,7 +46,7 @@ CREATE TABLE Categories (
 -- TABLA: MeasurementUnits
 -- Unidades de medida para productos (kg, L, ml, unidades)
 -- =============================================================
-CREATE TABLE MeasurementUnits (
+CREATE TABLE measurementUnits (
     measurementUnitId SERIAL       PRIMARY KEY,
     unitName          VARCHAR(20)  NOT NULL UNIQUE,
     is_deleted        BOOLEAN      NOT NULL DEFAULT FALSE,
@@ -57,7 +57,7 @@ CREATE TABLE MeasurementUnits (
 -- TABLA: Suppliers
 -- Proveedores internacionales que exportan a Nicaragua
 -- =============================================================
-CREATE TABLE Suppliers (
+CREATE TABLE suppliers (
     supplier_id    SERIAL          PRIMARY KEY,
     supplier_name  VARCHAR(150)    NOT NULL,
     country_id     INT             NOT NULL,
@@ -76,7 +76,7 @@ CREATE TABLE Suppliers (
 -- TABLA: Products
 -- Productos base importados en bulk, sin marca ni etiquetado
 -- =============================================================
-CREATE TABLE Products (
+CREATE TABLE products (
     product_id                 SERIAL           PRIMARY KEY,
     product_name               VARCHAR(150)     NOT NULL,
     category_id                INT              NOT NULL,
@@ -104,7 +104,7 @@ CREATE TABLE Products (
 -- TABLA: Warehouses
 -- Almacenes logísticos en el HUB de la costa Caribe de Nicaragua
 -- =============================================================
-CREATE TABLE Warehouses (
+CREATE TABLE warehouses (
     warehouse_id   SERIAL          PRIMARY KEY,
     name           VARCHAR(100)    NOT NULL,
     location       VARCHAR(150)    NOT NULL DEFAULT 'Nicaragua - Costa Caribe',
@@ -124,7 +124,7 @@ CREATE TABLE Warehouses (
 -- TABLA: Imports
 -- Órdenes de importación emitidas a proveedores
 -- =============================================================
-CREATE TABLE Imports (
+CREATE TABLE imports (
     import_id        SERIAL          PRIMARY KEY,
     supplier_id      INT             NOT NULL,
     import_date      DATE            NOT NULL,
@@ -148,7 +148,7 @@ CREATE TABLE Imports (
 -- TABLA: Import_details
 -- Líneas de detalle por producto dentro de cada importación
 -- =============================================================
-CREATE TABLE Import_details (
+CREATE TABLE import_details (
     import_detail_id SERIAL           PRIMARY KEY,
     import_id        INT              NOT NULL,
     product_id       INT              NOT NULL,
@@ -170,7 +170,7 @@ CREATE TABLE Import_details (
 -- TABLA: Logistic_costs
 -- Costos logísticos asociados a una importación (flete, seguro, puerto)
 -- =============================================================
-CREATE TABLE Logistic_costs (
+CREATE TABLE logistic_costs (
     logistic_cost_id   SERIAL          PRIMARY KEY,
     import_id          INT             NOT NULL UNIQUE,
     shipping_cost_usd  DECIMAL(12,2)   NOT NULL DEFAULT 0.00,
@@ -192,7 +192,7 @@ CREATE TABLE Logistic_costs (
 -- TABLA: Import_tariffs
 -- Aranceles e impuestos de importación por línea de detalle y país destino
 -- =============================================================
-CREATE TABLE Import_tariffs (
+CREATE TABLE import_tariffs (
     tariff_id              SERIAL           PRIMARY KEY,
     import_detail_id       INT              NOT NULL,
     destination_country_iso CHAR(3)         NOT NULL,
@@ -212,7 +212,7 @@ CREATE TABLE Import_tariffs (
 -- TABLA: Country_product_permits
 -- Permisos sanitarios por producto y país de destino
 -- =============================================================
-CREATE TABLE Country_product_permits (
+CREATE TABLE country_product_permits (
     permit_id               SERIAL          PRIMARY KEY,
     product_id              INT             NOT NULL,
     destination_country_iso CHAR(3)         NOT NULL,
@@ -242,7 +242,7 @@ CREATE TABLE Country_product_permits (
 -- Movimientos de inventario en el HUB (entradas, salidas, ajustes)
 -- El stock disponible se obtiene con SUM(quantity) por producto
 -- =============================================================
-CREATE TABLE Inventory (
+CREATE TABLE inventory (
     inventory_id      SERIAL           PRIMARY KEY,
     warehouse_id      INT              NOT NULL,
     product_id        INT              NOT NULL,
@@ -270,7 +270,7 @@ CREATE TABLE Inventory (
 -- TABLA: Exchange_rates
 -- Tipos de cambio históricos de monedas locales a USD
 -- =============================================================
-CREATE TABLE Exchange_rates (
+CREATE TABLE exchange_rates (
     exchange_rate_id SERIAL           PRIMARY KEY,
     country_id       INT              NOT NULL,
     currency_code    CHAR(3)          NOT NULL,
@@ -291,7 +291,7 @@ CREATE TABLE Exchange_rates (
 -- Órdenes de despacho desde el HUB hacia el país destino
 -- Tabla clave de integración ETL con Dynamic Brands
 -- =============================================================
-CREATE TABLE Dispatch_orders (
+CREATE TABLE dispatch_orders (
     dispatch_order_id     SERIAL           PRIMARY KEY,
     reference_order_id    INT              NOT NULL,   -- FK lógica a Dynamic Brands Orders.order_id (integración ETL)
     product_id            INT              NOT NULL,
@@ -322,7 +322,7 @@ CREATE TABLE Dispatch_orders (
 -- TABLA: Process_log
 -- Log de auditoría de todos los Stored Procedures
 -- =============================================================
-CREATE TABLE Process_log (
+CREATE TABLE process_log (
     log_id             BIGSERIAL        PRIMARY KEY,
     sp_name            VARCHAR(100)     NOT NULL,
     action_description TEXT             NOT NULL,

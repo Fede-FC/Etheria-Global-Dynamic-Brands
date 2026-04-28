@@ -462,7 +462,7 @@ DECLARE
     v_stock         DECIMAL(12,3);
     v_dispatch_id   INT;
 BEGIN
-    CALL sp_log_process('sp_register_dispatch', 'Iniciando despacho para orden DB ref: ' || p_reference_order_id::TEXT || ' producto: ' || p_product_name, 'Dispatch_orders', NULL, 'INFO');
+    CALL sp_log_process('sp_register_dispatch', 'Iniciando despacho para orden DB ref: ' || p_reference_order_id::TEXT || ' producto: ' || p_product_name, 'dispatch_orders', NULL, 'INFO');
 
     SELECT product_id INTO v_product_id FROM Products WHERE product_name = p_product_name AND is_deleted = FALSE LIMIT 1;
     IF v_product_id IS NULL THEN
@@ -490,7 +490,7 @@ BEGIN
     WHERE product_id = v_product_id AND warehouse_id = v_warehouse_id AND movement_type = 'ENTRY';
 
     -- Crear orden de despacho
-    INSERT INTO Dispatch_orders (
+    INSERT INTO dispatch_orders (
         reference_order_id, product_id, quantity, warehouse_id,
         destination_country_iso, brand_label, packaging_permit_ok,
         unit_cost_usd, dispatch_date, courier_handoff_date, status
@@ -501,7 +501,7 @@ BEGIN
     )
     RETURNING dispatch_order_id INTO v_dispatch_id;
 
-    CALL sp_log_process('sp_register_dispatch', 'Dispatch_order creada ID: ' || v_dispatch_id::TEXT, 'Dispatch_orders', v_dispatch_id, 'INFO');
+    CALL sp_log_process('sp_register_dispatch', 'Dispatch_order creada ID: ' || v_dispatch_id::TEXT, 'dispatch_orders', v_dispatch_id, 'INFO');
 
     -- Descontar inventario (salida negativa)
     INSERT INTO Inventory (warehouse_id, product_id, quantity, cost_per_unit_usd, movement_type, reference_type, reference_id, moved_by)
@@ -510,7 +510,7 @@ BEGIN
     CALL sp_log_process('sp_register_dispatch', 'Inventario descontado: -' || p_quantity::TEXT || ' unidades producto_id ' || v_product_id::TEXT, 'Inventory', v_dispatch_id, 'SUCCESS');
 
 EXCEPTION WHEN OTHERS THEN
-    CALL sp_log_process('sp_register_dispatch', 'Error en despacho para orden ref: ' || p_reference_order_id::TEXT, 'Dispatch_orders', NULL, 'ERROR', SQLERRM);
+    CALL sp_log_process('sp_register_dispatch', 'Error en despacho para orden ref: ' || p_reference_order_id::TEXT, 'dispatch_orders', NULL, 'ERROR', SQLERRM);
     RAISE;
 END;
 $$;
