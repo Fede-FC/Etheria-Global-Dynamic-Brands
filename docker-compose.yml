@@ -21,7 +21,8 @@ services:
       test: ["CMD-SHELL", "pg_isready -U etheria_user -d etheria_global_db"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 15
+      start_period: 30s
     networks:
       - proyecto_network
 
@@ -47,20 +48,21 @@ services:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "dynamic_user", "-pdynamic_pass"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 15
+      start_period: 45s
     networks:
       - proyecto_network
 
   # ============================================================
   #  ETL — Extrae de ambas DBs y carga schema analytics
-  #  Se ejecuta una sola vez cuando ambas DBs están listas
+  #  restart: on-failure permite reintentos si falla por timing
   # ============================================================
   etl:
     build:
       context: ./etl
       dockerfile: Dockerfile
     container_name: etl_runner
-    restart: "no"
+    restart: on-failure
     environment:
       PG_HOST:        etheria_postgres
       PG_PORT:        "5432"
@@ -82,6 +84,7 @@ services:
 
   # ============================================================
   #  Dashboard API — Flask que expone el schema analytics
+  #  NO depende de etl para no bloquearse si el ETL tarda
   # ============================================================
   dashboard_api:
     build:
@@ -98,8 +101,8 @@ services:
       PG_USER:     etheria_user
       PG_PASSWORD: etheria_pass
     depends_on:
-      etl:
-        condition: service_completed_successfully
+      etheria_postgres:
+        condition: service_healthy
     networks:
       - proyecto_network
 
