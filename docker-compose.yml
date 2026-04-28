@@ -21,7 +21,7 @@ services:
       test: ["CMD-SHELL", "pg_isready -U etheria_user -d etheria_global_db"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
     networks:
       - proyecto_network
 
@@ -47,20 +47,88 @@ services:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "dynamic_user", "-pdynamic_pass"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 15
+    networks:
+      - proyecto_network
+
+  # ============================================================
+  #  ETL — Extrae de ambas DBs y carga schema analytics
+  #  Se ejecuta una sola vez cuando ambas DBs están listas
+  # ============================================================
+  etl:
+    build:
+      context: ./etl
+      dockerfile: Dockerfile
+    container_name: etl_runner
+    restart: "no"
+    environment:
+      PG_HOST:        etheria_postgres
+      PG_PORT:        "5432"
+      PG_DB:          etheria_global_db
+      PG_USER:        etheria_user
+      PG_PASSWORD:    etheria_pass
+      MYSQL_HOST:     dynamic_mysql
+      MYSQL_PORT:     "3306"
+      MYSQL_DB:       dynamic_brands_db
+      MYSQL_USER:     dynamic_user
+      MYSQL_PASSWORD: dynamic_pass
+    depends_on:
+      etheria_postgres:
+        condition: service_healthy
+      dynamic_mysql:
+        condition: service_healthy
+    networks:
+      - proyecto_network
+
+  # ============================================================
+  #  Dashboard API — Flask que expone el schema analytics
+  # ============================================================
+  dashboard_api:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: dashboard_api
+    restart: unless-stopped
+    ports:
+      - "5050:5050"
+    environment:
+      PG_HOST:     etheria_postgres
+      PG_PORT:     "5432"
+      PG_DB:       etheria_global_db
+      PG_USER:     etheria_user
+      PG_PASSWORD: etheria_pass
+    depends_on:
+      etl:
+        condition: service_completed_successfully
+    networks:
+      - proyecto_network
+
+  # ============================================================
+  #  Dashboard UI — Nginx sirviendo el HTML estático
+  # ============================================================
+  dashboard_ui:
+    image: nginx:alpine
+    container_name: dashboard_ui
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./dashboard/dashboard.html:/usr/share/nginx/html/index.html
+      - ./dashboard/nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - dashboard_api
     networks:
       - proyecto_network
 
 # ============================================================
 #  Volúmenes persistentes
-#  Los datos sobreviven aunque apagues los contenedores
 # ============================================================
 volumes:
   etheria_data:
   dynamic_data:
 
 # ============================================================
-#  Red interna compartida entre contenedores
+#  Red interna compartida
 # ============================================================
 networks:
   proyecto_network:

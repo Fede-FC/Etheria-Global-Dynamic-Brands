@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard Gerencial — Etheria × Dynamic Brands</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #080c10;
+    --surface:   #0e1419;
+    --surface2:  #141c24;
+    --border:    #1e2d3d;
+    --accent:    #00d4aa;
+    --accent2:   #ff6b35;
+    --accent3:   #7c6af7;
+    --text:      #e8f0f8;
+    --muted:     #5a7a96;
+    --positive:  #00d4aa;
+    --negative:  #ff4466;
+    --warning:   #ffbb00;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── HEADER ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 36px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .header-brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .logo-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 12px var(--accent);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.6; transform: scale(0.8); }
+  }
+
+  header h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    color: var(--text);
+  }
+
+  header h1 span { color: var(--accent); }
+
+  .header-meta {
+    font-size: 11px;
+    color: var(--muted);
+    text-align: right;
+    line-height: 1.6;
+  }
+
+  .live-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(0,212,170,0.1);
+    border: 1px solid rgba(0,212,170,0.3);
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 10px;
+    color: var(--accent);
+    margin-top: 4px;
+  }
+
+  /* ── MAIN LAYOUT ── */
+  main { padding: 28px 36px; max-width: 1400px; margin: 0 auto; }
+
+  section { margin-bottom: 40px; }
+
+  .section-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .section-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* ── KPI CARDS ── */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+
+  .kpi-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 22px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+
+  .kpi-card:hover { border-color: var(--accent); }
+
+  .kpi-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--accent);
+    opacity: 0.6;
+  }
+
+  .kpi-card.accent2::before { background: var(--accent2); }
+  .kpi-card.accent3::before { background: var(--accent3); }
+  .kpi-card.warning::before { background: var(--warning); }
+
+  .kpi-label {
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+
+  .kpi-value {
+    font-family: 'Syne', sans-serif;
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--text);
+    line-height: 1;
+  }
+
+  .kpi-value.green  { color: var(--positive); }
+  .kpi-value.orange { color: var(--accent2); }
+  .kpi-value.purple { color: var(--accent3); }
+  .kpi-value.yellow { color: var(--warning); }
+
+  .kpi-sub {
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+
+  /* ── CHARTS GRID ── */
+  .charts-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+
+  .chart-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 22px;
+  }
+
+  .chart-card.full { grid-column: 1 / -1; }
+
+  .chart-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 18px;
+    color: var(--text);
+  }
+
+  .chart-title small {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    display: block;
+    margin-top: 2px;
+  }
+
+  canvas { max-height: 280px; }
+
+  /* ── TABLE ── */
+  .table-wrap { overflow-x: auto; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  thead th {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  tbody tr {
+    border-bottom: 1px solid rgba(30,45,61,0.5);
+    transition: background 0.15s;
+  }
+
+  tbody tr:hover { background: var(--surface2); }
+
+  tbody td {
+    padding: 10px 14px;
+    color: var(--text);
+    white-space: nowrap;
+  }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+  }
+
+  .badge-green  { background: rgba(0,212,170,0.15); color: var(--positive); }
+  .badge-orange { background: rgba(255,107,53,0.15); color: var(--accent2); }
+  .badge-purple { background: rgba(124,106,247,0.15); color: var(--accent3); }
+  .badge-yellow { background: rgba(255,187,0,0.15);  color: var(--warning); }
+
+  .num-positive { color: var(--positive); }
+  .num-negative { color: var(--negative); }
+
+  /* ── LOADING ── */
+  .loading {
+    text-align: center;
+    padding: 60px;
+    color: var(--muted);
+    font-size: 12px;
+    letter-spacing: 0.1em;
+  }
+
+  .spinner {
+    width: 32px; height: 32px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin: 0 auto 16px;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── COUNTRY TABLE ── */
+  .flag { font-size: 18px; margin-right: 8px; }
+
+  .bar-inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .bar-bg {
+    flex: 1;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    max-width: 80px;
+  }
+
+  .bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+  }
+
+  /* ── RESPONSIVE ── */
+  @media (max-width: 900px) {
+    .kpi-grid    { grid-template-columns: repeat(2, 1fr); }
+    .charts-grid { grid-template-columns: 1fr; }
+    main { padding: 16px 18px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-brand">
+    <div class="logo-dot"></div>
+    <h1>ETHERIA <span>×</span> DYNAMIC BRANDS<br>
+      <small style="font-size:11px;font-weight:400;color:var(--muted);font-family:'JetBrains Mono',monospace">
+        Intelligence Dashboard — Analytics Layer
+      </small>
+    </h1>
+  </div>
+  <div class="header-meta">
+    <div>PostgreSQL + MySQL → ETL → analytics.*</div>
+    <div class="live-badge">
+      <div class="logo-dot" style="width:6px;height:6px;margin:0"></div>
+      DATOS EN VIVO
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <!-- KPIs globales -->
+  <section>
+    <div class="section-title">Indicadores Clave de Rendimiento</div>
+    <div class="kpi-grid" id="kpi-grid">
+      <div class="loading"><div class="spinner"></div>Cargando KPIs...</div>
+    </div>
+  </section>
+
+  <!-- Gráficas principales -->
+  <section>
+    <div class="section-title">Análisis de Rentabilidad</div>
+    <div class="charts-grid">
+
+      <div class="chart-card">
+        <div class="chart-title">
+          Margen Neto por País
+          <small>Revenue USD vs Costo total USD (post-envío, permisos e impuestos)</small>
+        </div>
+        <canvas id="chartCountry"></canvas>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-title">
+          Efectividad de Marcas IA
+          <small>Revenue USD generado por cada marca blanca desplegada</small>
+        </div>
+        <canvas id="chartBrands"></canvas>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-title">
+          Margen por Categoría de Producto
+          <small>Costo base USD → Costo landed USD → Precio venta USD</small>
+        </div>
+        <canvas id="chartCategory"></canvas>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-title">
+          Impacto de Costos por País
+          <small>Desglose: producto + logística + permisos + envío + impuesto</small>
+        </div>
+        <canvas id="chartCostBreakdown"></canvas>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Tabla rentabilidad por país -->
+  <section>
+    <div class="section-title">Rentabilidad por País — Vista Gerencial</div>
+    <div class="chart-card">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>País</th>
+              <th>Moneda</th>
+              <th>Órdenes</th>
+              <th>Revenue USD</th>
+              <th>Costo Total USD</th>
+              <th>Margen Bruto</th>
+              <th>Envío USD</th>
+              <th>Permisos USD</th>
+              <th>Impuesto %</th>
+              <th>Margen Neto</th>
+              <th>Margen Neto %</th>
+            </tr>
+          </thead>
+          <tbody id="country-tbody">
+            <tr><td colspan="11" class="loading"><div class="spinner"></div>Cargando...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tabla efectividad de sitios IA -->
+  <section>
+    <div class="section-title">Efectividad de Sitios IA por Marca y País</div>
+    <div class="chart-card">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Marca IA</th>
+              <th>Sitio Web</th>
+              <th>País</th>
+              <th>Modelo IA</th>
+              <th>Órdenes</th>
+              <th>Revenue USD</th>
+              <th>Margen USD</th>
+              <th>Margen %</th>
+              <th>Ticket Promedio</th>
+            </tr>
+          </thead>
+          <tbody id="brand-tbody">
+            <tr><td colspan="9" class="loading"><div class="spinner"></div>Cargando...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tabla órdenes recientes -->
+  <section>
+    <div class="section-title">Órdenes Recientes — Compra vs Venta Unificado</div>
+    <div class="chart-card">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Marca</th>
+              <th>País</th>
+              <th>Producto</th>
+              <th>Categoría</th>
+              <th>Qty</th>
+              <th>P.Venta Local</th>
+              <th>Revenue USD</th>
+              <th>Costo Real/u USD</th>
+              <th>Margen USD</th>
+              <th>Margen %</th>
+              <th>Estado</th>
+            </tr>
+          </thead>
+          <tbody id="orders-tbody">
+            <tr><td colspan="12" class="loading"><div class="spinner"></div>Cargando...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+const API = "http://localhost:5050/api";
+
+const COLORS = {
+  accent:  "rgba(0,212,170,",
+  orange:  "rgba(255,107,53,",
+  purple:  "rgba(124,106,247,",
+  yellow:  "rgba(255,187,0,",
+  red:     "rgba(255,68,102,",
+};
+
+const chartDefaults = {
+  responsive: true,
+  maintainAspectRatio: true,
+  plugins: {
+    legend: {
+      labels: { color: "#5a7a96", font: { family: "JetBrains Mono", size: 11 } }
+    },
+    tooltip: {
+      backgroundColor: "#0e1419",
+      borderColor: "#1e2d3d",
+      borderWidth: 1,
+      titleColor: "#e8f0f8",
+      bodyColor: "#5a7a96",
+      titleFont: { family: "Syne", size: 13 },
+      bodyFont:  { family: "JetBrains Mono", size: 11 },
+    }
+  },
+  scales: {
+    x: { ticks: { color: "#5a7a96", font: { family: "JetBrains Mono", size: 10 } }, grid: { color: "#1e2d3d" } },
+    y: { ticks: { color: "#5a7a96", font: { family: "JetBrains Mono", size: 10 } }, grid: { color: "#1e2d3d" } },
+  }
+};
+
+function usd(n) { return "$" + parseFloat(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function pct(n) { return parseFloat(n || 0).toFixed(2) + "%"; }
+
+const FLAGS = { COL:"🇨🇴", MEX:"🇲🇽", PER:"🇵🇪", CHL:"🇨🇱", CRI:"🇨🇷" };
+
+// ─────────────────────────────────────────────────
+// KPIs
+// ─────────────────────────────────────────────────
+async function loadKPIs() {
+  try {
+    const d = await fetch(API + "/kpis").then(r => r.json());
+    document.getElementById("kpi-grid").innerHTML = `
+      <div class="kpi-card">
+        <div class="kpi-label">Revenue Total</div>
+        <div class="kpi-value green">${usd(d.total_revenue_usd)}</div>
+        <div class="kpi-sub">USD consolidado todas las monedas</div>
+      </div>
+      <div class="kpi-card accent2">
+        <div class="kpi-label">Margen Bruto</div>
+        <div class="kpi-value orange">${usd(d.total_margin_usd)}</div>
+        <div class="kpi-sub">${pct(d.avg_margin_pct)} promedio por orden</div>
+      </div>
+      <div class="kpi-card accent3">
+        <div class="kpi-label">Costo Total</div>
+        <div class="kpi-value purple">${usd(d.total_cost_usd)}</div>
+        <div class="kpi-sub">Incluye logística + permisos + envío</div>
+      </div>
+      <div class="kpi-card warning">
+        <div class="kpi-label">Órdenes Procesadas</div>
+        <div class="kpi-value yellow">${d.total_orders}</div>
+        <div class="kpi-sub">${d.sites_active} sitios · ${d.brands_active} marcas · ${d.countries_active} países</div>
+      </div>
+    `;
+  } catch(e) {
+    document.getElementById("kpi-grid").innerHTML = `<div class="loading">Error conectando al API. ¿Está corriendo dashboard_api.py?</div>`;
+  }
+}
+
+// ─────────────────────────────────────────────────
+// Gráfica: rentabilidad por país
+// ─────────────────────────────────────────────────
+async function loadCountryChart() {
+  const data = await fetch(API + "/country_profitability").then(r => r.json());
+  const labels = data.map(d => (FLAGS[d.sale_country_iso] || "") + " " + d.sale_country);
+
+  new Chart(document.getElementById("chartCountry"), {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "Revenue USD",
+          data: data.map(d => +d.total_revenue_usd),
+          backgroundColor: COLORS.accent + "0.7)",
+          borderColor:     COLORS.accent + "1)",
+          borderWidth: 1,
+        },
+        {
+          label: "Margen Neto USD",
+          data: data.map(d => +d.net_margin_after_tax_usd),
+          backgroundColor: COLORS.orange + "0.7)",
+          borderColor:     COLORS.orange + "1)",
+          borderWidth: 1,
+        }
+      ]
+    },
+    options: { ...chartDefaults }
+  });
+
+  // Poblar tabla
+  const tbody = document.getElementById("country-tbody");
+  tbody.innerHTML = data.map(d => {
+    const mPct = parseFloat(d.net_margin_pct);
+    const cls  = mPct > 30 ? "num-positive" : mPct > 10 ? "" : "num-negative";
+    return `<tr>
+      <td>${FLAGS[d.sale_country_iso] || ""} <b>${d.sale_country}</b></td>
+      <td><span class="badge badge-purple">${d.currency_code}</span></td>
+      <td>${d.total_orders}</td>
+      <td class="num-positive">${usd(d.total_revenue_usd)}</td>
+      <td>${usd(d.total_cost_usd)}</td>
+      <td>${usd(d.total_margin_usd)}</td>
+      <td>${usd(d.total_shipping_usd)}</td>
+      <td>${usd(d.total_permit_usd)}</td>
+      <td><span class="badge badge-yellow">${pct(d.tax_rate_percent)}</span></td>
+      <td class="${cls}">${usd(d.net_margin_after_tax_usd)}</td>
+      <td class="${cls}"><b>${pct(d.net_margin_pct)}</b></td>
+    </tr>`;
+  }).join("");
+}
+
+// ─────────────────────────────────────────────────
+// Gráfica: efectividad de marcas IA
+// ─────────────────────────────────────────────────
+async function loadBrandChart() {
+  const data = await fetch(API + "/brand_performance").then(r => r.json());
+
+  // Agrupar por marca
+  const byBrand = {};
+  data.forEach(d => {
+    if (!byBrand[d.brand_name]) byBrand[d.brand_name] = { revenue: 0, margin: 0, orders: 0 };
+    byBrand[d.brand_name].revenue += +d.total_revenue_usd;
+    byBrand[d.brand_name].margin  += +d.total_margin_usd;
+    byBrand[d.brand_name].orders  += +d.total_orders;
+  });
+
+  const brandNames = Object.keys(byBrand);
+  const palettes   = [COLORS.accent, COLORS.orange, COLORS.purple, COLORS.yellow, COLORS.red];
+
+  new Chart(document.getElementById("chartBrands"), {
+    type: "doughnut",
+    data: {
+      labels: brandNames,
+      datasets: [{
+        data: brandNames.map(b => byBrand[b].revenue.toFixed(2)),
+        backgroundColor: palettes.map(c => c + "0.8)"),
+        borderColor:     palettes.map(c => c + "1)"),
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      ...chartDefaults,
+      scales: {},
+      plugins: {
+        ...chartDefaults.plugins,
+        legend: { position: "bottom", labels: { color: "#5a7a96", font: { family: "JetBrains Mono", size: 11 }, padding: 16 } }
+      }
+    }
+  });
+
+  // Tabla de marcas
+  const tbody = document.getElementById("brand-tbody");
+  tbody.innerHTML = data.map(d => `<tr>
+    <td><b>${d.brand_name}</b></td>
+    <td style="font-size:10px;color:var(--muted)">${d.site_url}</td>
+    <td>${FLAGS[d.sale_country_iso] || ""} ${d.sale_country}</td>
+    <td><span class="badge badge-purple">${d.ai_model_version}</span></td>
+    <td>${d.total_orders}</td>
+    <td class="num-positive">${usd(d.total_revenue_usd)}</td>
+    <td>${usd(d.total_margin_usd)}</td>
+    <td class="${parseFloat(d.avg_margin_pct) > 30 ? 'num-positive' : ''}">${pct(d.avg_margin_pct)}</td>
+    <td>${usd(d.avg_order_value_usd)}</td>
+  </tr>`).join("");
+}
+
+// ─────────────────────────────────────────────────
+// Gráfica: márgenes por categoría
+// ─────────────────────────────────────────────────
+async function loadCategoryChart() {
+  const data = await fetch(API + "/category_margins").then(r => r.json());
+
+  new Chart(document.getElementById("chartCategory"), {
+    type: "bar",
+    data: {
+      labels: data.map(d => d.category_name),
+      datasets: [
+        {
+          label: "Costo Base/u USD",
+          data: data.map(d => +d.avg_base_cost_usd),
+          backgroundColor: COLORS.red    + "0.7)",
+          stack: "costs"
+        },
+        {
+          label: "Costo Landed/u USD",
+          data: data.map(d => (+d.avg_landed_cost_usd - +d.avg_base_cost_usd).toFixed(4)),
+          backgroundColor: COLORS.yellow + "0.7)",
+          stack: "costs"
+        },
+        {
+          label: "Margen/u USD",
+          data: data.map(d => (+d.avg_real_cost_usd > 0
+            ? (+d.total_revenue_usd / +d.total_units_sold - +d.avg_real_cost_usd)
+            : 0).toFixed(4)),
+          backgroundColor: COLORS.accent + "0.8)",
+          stack: "costs"
+        }
+      ]
+    },
+    options: {
+      ...chartDefaults,
+      scales: {
+        x: { ...chartDefaults.scales.x, stacked: true },
+        y: { ...chartDefaults.scales.y, stacked: true },
+      }
+    }
+  });
+}
+
+// ─────────────────────────────────────────────────
+// Gráfica: desglose de costos por país
+// ─────────────────────────────────────────────────
+async function loadCostBreakdown() {
+  const data = await fetch(API + "/country_profitability").then(r => r.json());
+
+  new Chart(document.getElementById("chartCostBreakdown"), {
+    type: "bar",
+    data: {
+      labels: data.map(d => d.sale_country),
+      datasets: [
+        {
+          label: "Costo Producto USD",
+          data: data.map(d => (+d.total_cost_usd - +d.total_shipping_usd - +d.total_permit_usd).toFixed(2)),
+          backgroundColor: COLORS.purple + "0.8)",
+          stack: "s"
+        },
+        {
+          label: "Envío USD",
+          data: data.map(d => +d.total_shipping_usd),
+          backgroundColor: COLORS.orange + "0.8)",
+          stack: "s"
+        },
+        {
+          label: "Permisos USD",
+          data: data.map(d => +d.total_permit_usd),
+          backgroundColor: COLORS.yellow + "0.8)",
+          stack: "s"
+        },
+        {
+          label: "Impuesto USD",
+          data: data.map(d => +d.tax_impact_usd),
+          backgroundColor: COLORS.red    + "0.7)",
+          stack: "s"
+        }
+      ]
+    },
+    options: {
+      ...chartDefaults,
+      scales: {
+        x: { ...chartDefaults.scales.x, stacked: true },
+        y: { ...chartDefaults.scales.y, stacked: true },
+      }
+    }
+  });
+}
+
+// ─────────────────────────────────────────────────
+// Tabla: órdenes recientes
+// ─────────────────────────────────────────────────
+async function loadOrders() {
+  const data = await fetch(API + "/recent_orders").then(r => r.json());
+  const statusBadge = s => {
+    const m = { CONFIRMADA:"green", EN_PREPARACION:"yellow", ENVIADA:"purple", ENTREGADA:"green", CANCELADA:"orange" };
+    return `<span class="badge badge-${m[s]||'orange'}">${s}</span>`;
+  };
+  const tbody = document.getElementById("orders-tbody");
+  tbody.innerHTML = data.map(d => `<tr>
+    <td>${d.order_date}</td>
+    <td><b>${d.brand_name}</b></td>
+    <td>${FLAGS[d.sale_country_iso]||""} ${d.sale_country}</td>
+    <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis">${d.branded_name}</td>
+    <td><span class="badge badge-purple">${d.category_name}</span></td>
+    <td>${d.quantity}</td>
+    <td>${parseFloat(d.unit_price_local).toLocaleString()} ${d.currency_code}</td>
+    <td class="num-positive">${usd(d.revenue_usd)}</td>
+    <td>${usd(d.real_cost_per_unit_usd)}</td>
+    <td class="${parseFloat(d.gross_margin_usd) >= 0 ? 'num-positive' : 'num-negative'}">${usd(d.gross_margin_usd)}</td>
+    <td class="${parseFloat(d.gross_margin_pct) > 20 ? 'num-positive' : ''}">${pct(d.gross_margin_pct)}</td>
+    <td>${statusBadge(d.order_status)}</td>
+  </tr>`).join("");
+}
+
+// ─────────────────────────────────────────────────
+// INIT
+// ─────────────────────────────────────────────────
+async function init() {
+  await loadKPIs();
+  await Promise.all([
+    loadCountryChart(),
+    loadBrandChart(),
+    loadCategoryChart(),
+    loadCostBreakdown(),
+    loadOrders(),
+  ]);
+}
+
+init();
+</script>
+</body>
+</html>
