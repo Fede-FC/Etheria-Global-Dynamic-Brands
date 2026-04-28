@@ -1,138 +1,61 @@
 services:
-
-  # ============================================================
-  #  PostgreSQL — Etheria Global (Sourcing & Logistics)
-  # ============================================================
-  etheria_postgres:
+  etheria_global_db:
     image: postgres:16
     container_name: etheria_global_db
-    restart: unless-stopped
     environment:
       POSTGRES_USER: etheria_user
-      POSTGRES_PASSWORD: etheria_pass
       POSTGRES_DB: etheria_global_db
-    ports:
-      - "5433:5432"
+      POSTGRES_HOST_AUTH_METHOD: trust
     volumes:
-      - etheria_data:/var/lib/postgresql/data
-      - ./postgres/01_etheria_global.sql:/docker-entrypoint-initdb.d/01_etheria_global.sql
-      - ./postgres/02_etheria_global_sp_data.sql:/docker-entrypoint-initdb.d/02_etheria_global_sp_data.sql
+      - ./postgres:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U etheria_user -d etheria_global_db"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 15
-      start_period: 30s
+      retries: 5
     networks:
       - proyecto_network
 
-  # ============================================================
-  #  MySQL — Dynamic Brands (AI-Driven Digital Retail)
-  # ============================================================
-  dynamic_mysql:
+  dynamic_brands_db:
     image: mysql:8.4
     container_name: dynamic_brands_db
-    restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: root_pass
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
       MYSQL_DATABASE: dynamic_brands_db
       MYSQL_USER: dynamic_user
-      MYSQL_PASSWORD: dynamic_pass
-    ports:
-      - "3307:3306"
+      MYSQL_PASSWORD: dynamic_password
     volumes:
-      - dynamic_data:/var/lib/mysql
-      - ./mysql/01_dynamic_brands.sql:/docker-entrypoint-initdb.d/01_dynamic_brands.sql
-      - ./mysql/02_dynamic_brands_sp_data.sql:/docker-entrypoint-initdb.d/02_dynamic_brands_sp_data.sql
+      - ./mysql:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "dynamic_user", "-pdynamic_pass"]
-      interval: 10s
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u dynamic_user --password=dynamic_password"]
+      interval: 5s
       timeout: 5s
-      retries: 15
-      start_period: 45s
+      retries: 5
     networks:
       - proyecto_network
 
-  # ============================================================
-  #  ETL — Extrae de ambas DBs y carga schema analytics
-  #  restart: on-failure permite reintentos si falla por timing
-  # ============================================================
-  etl:
-    build:
-      context: ./etl
-      dockerfile: Dockerfile
+  etl_runner:
+    build: ./etl
     container_name: etl_runner
-    restart: on-failure
-    environment:
-      PG_HOST:        etheria_postgres
-      PG_PORT:        "5432"
-      PG_DB:          etheria_global_db
-      PG_USER:        etheria_user
-      PG_PASSWORD:    etheria_pass
-      MYSQL_HOST:     dynamic_mysql
-      MYSQL_PORT:     "3306"
-      MYSQL_DB:       dynamic_brands_db
-      MYSQL_USER:     dynamic_user
-      MYSQL_PASSWORD: dynamic_pass
     depends_on:
-      etheria_postgres:
+      etheria_global_db:
         condition: service_healthy
-      dynamic_mysql:
+      dynamic_brands_db:
         condition: service_healthy
     networks:
       - proyecto_network
 
-  # ============================================================
-  #  Dashboard API — Flask que expone el schema analytics
-  #  NO depende de etl para no bloquearse si el ETL tarda
-  # ============================================================
-  dashboard_api:
-    build:
-      context: ./dashboard
-      dockerfile: Dockerfile
-    container_name: dashboard_api
-    restart: unless-stopped
+  dashboard:
+    build: ./dashboard
+    container_name: etheria_dashboard
     ports:
-      - "5050:5050"
-    environment:
-      PG_HOST:     etheria_postgres
-      PG_PORT:     "5432"
-      PG_DB:       etheria_global_db
-      PG_USER:     etheria_user
-      PG_PASSWORD: etheria_pass
+      - "5000:5000"
     depends_on:
-      etheria_postgres:
+      etheria_global_db:
         condition: service_healthy
     networks:
       - proyecto_network
 
-  # ============================================================
-  #  Dashboard UI — Nginx sirviendo el HTML estático
-  # ============================================================
-  dashboard_ui:
-    image: nginx:alpine
-    container_name: dashboard_ui
-    restart: unless-stopped
-    ports:
-      - "8080:80"
-    volumes:
-      - ./dashboard/dashboard.html:/usr/share/nginx/html/index.html
-      - ./dashboard/nginx.conf:/etc/nginx/conf.d/default.conf
-    depends_on:
-      - dashboard_api
-    networks:
-      - proyecto_network
-
-# ============================================================
-#  Volúmenes persistentes
-# ============================================================
-volumes:
-  etheria_data:
-  dynamic_data:
-
-# ============================================================
-#  Red interna compartida
-# ============================================================
 networks:
   proyecto_network:
     driver: bridge

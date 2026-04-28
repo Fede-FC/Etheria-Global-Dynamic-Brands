@@ -317,6 +317,14 @@
 <body>
 
 <header>
+  <div style="padding: 0 36px; margin-top: 10px;">
+    <button id="refresh-btn" onclick="refreshDashboard()" 
+            style="background: var(--accent); color: var(--bg); border: none; 
+                   padding: 8px 16px; font-family: 'JetBrains Mono'; 
+                   font-weight: bold; cursor: pointer; border-radius: 4px;">
+        🔄 ACTUALIZAR ANALYTICS
+    </button>
+  </div>
   <div class="header-brand">
     <div class="logo-dot"></div>
     <h1>ETHERIA <span>×</span> DYNAMIC BRANDS<br>
@@ -473,313 +481,202 @@
 </main>
 
 <script>
-const API = "http://localhost:5050/api";
+const API = '/api';
 
+const FLAGS = { COL:"🇨🇴", MEX:"🇲🇽", PER:"🇵🇪", CHL:"🇨🇱", CRI:"🇨🇷" };
 const COLORS = {
-  accent:  "rgba(0,212,170,",
-  orange:  "rgba(255,107,53,",
-  purple:  "rgba(124,106,247,",
-  yellow:  "rgba(255,187,0,",
-  red:     "rgba(255,68,102,",
-};
-
-const chartDefaults = {
-  responsive: true,
-  maintainAspectRatio: true,
-  plugins: {
-    legend: {
-      labels: { color: "#5a7a96", font: { family: "JetBrains Mono", size: 11 } }
-    },
-    tooltip: {
-      backgroundColor: "#0e1419",
-      borderColor: "#1e2d3d",
-      borderWidth: 1,
-      titleColor: "#e8f0f8",
-      bodyColor: "#5a7a96",
-      titleFont: { family: "Syne", size: 13 },
-      bodyFont:  { family: "JetBrains Mono", size: 11 },
-    }
-  },
-  scales: {
-    x: { ticks: { color: "#5a7a96", font: { family: "JetBrains Mono", size: 10 } }, grid: { color: "#1e2d3d" } },
-    y: { ticks: { color: "#5a7a96", font: { family: "JetBrains Mono", size: 10 } }, grid: { color: "#1e2d3d" } },
-  }
+  accent: "rgba(0,212,170,", orange: "rgba(255,107,53,", 
+  purple: "rgba(124,106,247,", yellow: "rgba(255,187,0,", red: "rgba(255,68,102,"
 };
 
 function usd(n) { return "$" + parseFloat(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function pct(n) { return parseFloat(n || 0).toFixed(2) + "%"; }
 
-const FLAGS = { COL:"🇨🇴", MEX:"🇲🇽", PER:"🇵🇪", CHL:"🇨🇱", CRI:"🇨🇷" };
-
-// ─────────────────────────────────────────────────
-// KPIs
-// ─────────────────────────────────────────────────
-async function loadKPIs() {
+async function fetchData(endpoint) {
   try {
-    const d = await fetch(API + "/kpis").then(r => r.json());
-    document.getElementById("kpi-grid").innerHTML = `
-      <div class="kpi-card">
-        <div class="kpi-label">Revenue Total</div>
-        <div class="kpi-value green">${usd(d.total_revenue_usd)}</div>
-        <div class="kpi-sub">USD consolidado todas las monedas</div>
-      </div>
-      <div class="kpi-card accent2">
-        <div class="kpi-label">Margen Bruto</div>
-        <div class="kpi-value orange">${usd(d.total_margin_usd)}</div>
-        <div class="kpi-sub">${pct(d.avg_margin_pct)} promedio por orden</div>
-      </div>
-      <div class="kpi-card accent3">
-        <div class="kpi-label">Costo Total</div>
-        <div class="kpi-value purple">${usd(d.total_cost_usd)}</div>
-        <div class="kpi-sub">Incluye logística + permisos + envío</div>
-      </div>
-      <div class="kpi-card warning">
-        <div class="kpi-label">Órdenes Procesadas</div>
-        <div class="kpi-value yellow">${d.total_orders}</div>
-        <div class="kpi-sub">${d.sites_active} sitios · ${d.brands_active} marcas · ${d.countries_active} países</div>
-      </div>
-    `;
-  } catch(e) {
-    document.getElementById("kpi-grid").innerHTML = `<div class="loading">Error conectando al API. ¿Está corriendo dashboard_api.py?</div>`;
+    const r = await fetch(`${API}${endpoint}`);
+    if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
+    return await r.json();
+  } catch (e) {
+    console.error(`Error en ${endpoint}:`, e);
+    return null;
   }
 }
+async function refreshDashboard() {
+    const btn = document.getElementById('refresh-btn');
+    btn.innerText = 'Actualizando...';
+    btn.disabled = true;
+    
+    await init(); // Recarga todos los datos
+    
+    btn.innerText = 'Actualizar Datos';
+    btn.disabled = false;
+}
+// Carga de KPIs mejorada
+async function loadKPIs() {
+  const d = await fetchData("/kpis");
+  const container = document.getElementById("kpi-grid");
+  if (!d) { container.innerHTML = `<div class="loading">Error de conexión con API</div>`; return; }
+  
+  container.innerHTML = `
+    <div class="kpi-card"><div class="kpi-label">Revenue Total</div><div class="kpi-value green">${usd(d.total_revenue_usd)}</div><div class="kpi-sub">Consolidado global</div></div>
+    <div class="kpi-card accent2"><div class="kpi-label">Margen Bruto</div><div class="kpi-value orange">${usd(d.total_margin_usd)}</div><div class="kpi-sub">${pct(d.avg_margin_pct)} promedio</div></div>
+    <div class="kpi-card accent3"><div class="kpi-label">Costo Total</div><div class="kpi-value purple">${usd(d.total_cost_usd)}</div><div class="kpi-sub">Logística e impuestos</div></div>
+    <div class="kpi-card warning"><div class="kpi-label">Órdenes</div><div class="kpi-value yellow">${d.total_orders}</div><div class="kpi-sub">${d.sites_active} sitios en ${d.countries_active} países</div></div>
+  `;
+}
 
-// ─────────────────────────────────────────────────
-// Gráfica: rentabilidad por país
-// ─────────────────────────────────────────────────
+let chartCountry, chartBrands, chartCategory, chartCostBreakdown;
+
 async function loadCountryChart() {
-  const data = await fetch(API + "/country_profitability").then(r => r.json());
-  const labels = data.map(d => (FLAGS[d.sale_country_iso] || "") + " " + d.sale_country);
-
-  new Chart(document.getElementById("chartCountry"), {
-    type: "bar",
+  const data = await fetchData("/by_country");
+  if (!data || data.error) return;
+  const labels = data.map(d => d.country_iso);
+  const revenue = data.map(d => parseFloat(d.total_ventas_usd || 0));
+  const costo   = data.map(d => parseFloat(d.total_costo_usd || 0));
+  const ctx = document.getElementById('chartCountry').getContext('2d');
+  if (chartCountry) chartCountry.destroy();
+  chartCountry = new Chart(ctx, {
+    type: 'bar',
     data: {
       labels,
       datasets: [
-        {
-          label: "Revenue USD",
-          data: data.map(d => +d.total_revenue_usd),
-          backgroundColor: COLORS.accent + "0.7)",
-          borderColor:     COLORS.accent + "1)",
-          borderWidth: 1,
-        },
-        {
-          label: "Margen Neto USD",
-          data: data.map(d => +d.net_margin_after_tax_usd),
-          backgroundColor: COLORS.orange + "0.7)",
-          borderColor:     COLORS.orange + "1)",
-          borderWidth: 1,
-        }
+        { label: 'Revenue USD', data: revenue, backgroundColor: 'rgba(0,212,170,0.7)' },
+        { label: 'Costo USD',   data: costo,   backgroundColor: 'rgba(255,107,53,0.7)' }
       ]
     },
-    options: { ...chartDefaults }
+    options: { responsive: true, plugins: { legend: { labels: { color: '#e8f0f8' } } },
+               scales: { x: { ticks: { color: '#5a7a96' } }, y: { ticks: { color: '#5a7a96' } } } }
   });
 
-  // Poblar tabla
-  const tbody = document.getElementById("country-tbody");
-  tbody.innerHTML = data.map(d => {
-    const mPct = parseFloat(d.net_margin_pct);
-    const cls  = mPct > 30 ? "num-positive" : mPct > 10 ? "" : "num-negative";
-    return `<tr>
-      <td>${FLAGS[d.sale_country_iso] || ""} <b>${d.sale_country}</b></td>
-      <td><span class="badge badge-purple">${d.currency_code}</span></td>
-      <td>${d.total_orders}</td>
-      <td class="num-positive">${usd(d.total_revenue_usd)}</td>
-      <td>${usd(d.total_cost_usd)}</td>
-      <td>${usd(d.total_margin_usd)}</td>
-      <td>${usd(d.total_shipping_usd)}</td>
-      <td>${usd(d.total_permit_usd)}</td>
-      <td><span class="badge badge-yellow">${pct(d.tax_rate_percent)}</span></td>
-      <td class="${cls}">${usd(d.net_margin_after_tax_usd)}</td>
-      <td class="${cls}"><b>${pct(d.net_margin_pct)}</b></td>
-    </tr>`;
-  }).join("");
+  // Llenar tabla de países
+  const tbody = document.getElementById('country-tbody');
+  if (tbody) {
+    tbody.innerHTML = data.map(d => `
+      <tr>
+        <td>${d.country_iso}</td>
+        <td>${d.currency_iso || '-'}</td>
+        <td>${d.num_ordenes || 0}</td>
+        <td class="num-positive">${usd(d.total_ventas_usd)}</td>
+        <td>${usd(d.total_costo_usd)}</td>
+        <td class="${d.utilidad_usd >= 0 ? 'num-positive' : 'num-negative'}">${usd(d.utilidad_usd)}</td>
+        <td>-</td><td>-</td><td>-</td>
+        <td class="${d.utilidad_usd >= 0 ? 'num-positive' : 'num-negative'}">${usd(d.utilidad_usd)}</td>
+        <td>${pct(d.margen_promedio_pct)}</td>
+      </tr>`).join('');
+  }
 }
 
-// ─────────────────────────────────────────────────
-// Gráfica: efectividad de marcas IA
-// ─────────────────────────────────────────────────
 async function loadBrandChart() {
-  const data = await fetch(API + "/brand_performance").then(r => r.json());
-
-  // Agrupar por marca
-  const byBrand = {};
-  data.forEach(d => {
-    if (!byBrand[d.brand_name]) byBrand[d.brand_name] = { revenue: 0, margin: 0, orders: 0 };
-    byBrand[d.brand_name].revenue += +d.total_revenue_usd;
-    byBrand[d.brand_name].margin  += +d.total_margin_usd;
-    byBrand[d.brand_name].orders  += +d.total_orders;
-  });
-
-  const brandNames = Object.keys(byBrand);
-  const palettes   = [COLORS.accent, COLORS.orange, COLORS.purple, COLORS.yellow, COLORS.red];
-
-  new Chart(document.getElementById("chartBrands"), {
-    type: "doughnut",
+  const data = await fetchData("/by_brand");
+  if (!data || data.error) return;
+  const labels  = data.map(d => d.brand_name);
+  const revenue = data.map(d => parseFloat(d.total_ventas_usd || 0));
+  const ctx = document.getElementById('chartBrands').getContext('2d');
+  if (chartBrands) chartBrands.destroy();
+  chartBrands = new Chart(ctx, {
+    type: 'doughnut',
     data: {
-      labels: brandNames,
-      datasets: [{
-        data: brandNames.map(b => byBrand[b].revenue.toFixed(2)),
-        backgroundColor: palettes.map(c => c + "0.8)"),
-        borderColor:     palettes.map(c => c + "1)"),
-        borderWidth: 2,
-      }]
+      labels,
+      datasets: [{ data: revenue,
+        backgroundColor: ['rgba(0,212,170,0.8)','rgba(255,107,53,0.8)','rgba(124,106,247,0.8)',
+                          'rgba(255,187,0,0.8)','rgba(255,68,102,0.8)'] }]
     },
-    options: {
-      ...chartDefaults,
-      scales: {},
-      plugins: {
-        ...chartDefaults.plugins,
-        legend: { position: "bottom", labels: { color: "#5a7a96", font: { family: "JetBrains Mono", size: 11 }, padding: 16 } }
-      }
-    }
+    options: { responsive: true, plugins: { legend: { labels: { color: '#e8f0f8' } } } }
   });
 
-  // Tabla de marcas
-  const tbody = document.getElementById("brand-tbody");
-  tbody.innerHTML = data.map(d => `<tr>
-    <td><b>${d.brand_name}</b></td>
-    <td style="font-size:10px;color:var(--muted)">${d.site_url}</td>
-    <td>${FLAGS[d.sale_country_iso] || ""} ${d.sale_country}</td>
-    <td><span class="badge badge-purple">${d.ai_model_version}</span></td>
-    <td>${d.total_orders}</td>
-    <td class="num-positive">${usd(d.total_revenue_usd)}</td>
-    <td>${usd(d.total_margin_usd)}</td>
-    <td class="${parseFloat(d.avg_margin_pct) > 30 ? 'num-positive' : ''}">${pct(d.avg_margin_pct)}</td>
-    <td>${usd(d.avg_order_value_usd)}</td>
-  </tr>`).join("");
+  // Llenar tabla de marcas
+  const tbody = document.getElementById('brand-tbody');
+  if (tbody) {
+    tbody.innerHTML = data.map(d => `
+      <tr>
+        <td><b>${d.brand_name}</b></td>
+        <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;font-size:11px">${d.site_url}</td>
+        <td>-</td><td>-</td>
+        <td>${d.num_ordenes || 0}</td>
+        <td class="num-positive">${usd(d.total_ventas_usd)}</td>
+        <td class="${d.utilidad_usd >= 0 ? 'num-positive' : 'num-negative'}">${usd(d.utilidad_usd)}</td>
+        <td>${pct(d.margen_promedio_pct)}</td>
+        <td>${d.num_ordenes > 0 ? usd(d.total_ventas_usd / d.num_ordenes) : '-'}</td>
+      </tr>`).join('');
+  }
 }
 
-// ─────────────────────────────────────────────────
-// Gráfica: márgenes por categoría
-// ─────────────────────────────────────────────────
 async function loadCategoryChart() {
-  const data = await fetch(API + "/category_margins").then(r => r.json());
-
-  new Chart(document.getElementById("chartCategory"), {
-    type: "bar",
+  const data = await fetchData("/by_category");
+  if (!data || data.error) return;
+  const labels  = data.map(d => d.categoria);
+  const revenue = data.map(d => parseFloat(d.revenue || 0));
+  const costo   = data.map(d => parseFloat(d.costo || 0));
+  const ctx = document.getElementById('chartCategory').getContext('2d');
+  if (chartCategory) chartCategory.destroy();
+  chartCategory = new Chart(ctx, {
+    type: 'bar',
     data: {
-      labels: data.map(d => d.category_name),
+      labels,
       datasets: [
-        {
-          label: "Costo Base/u USD",
-          data: data.map(d => +d.avg_base_cost_usd),
-          backgroundColor: COLORS.red    + "0.7)",
-          stack: "costs"
-        },
-        {
-          label: "Costo Landed/u USD",
-          data: data.map(d => (+d.avg_landed_cost_usd - +d.avg_base_cost_usd).toFixed(4)),
-          backgroundColor: COLORS.yellow + "0.7)",
-          stack: "costs"
-        },
-        {
-          label: "Margen/u USD",
-          data: data.map(d => (+d.avg_real_cost_usd > 0
-            ? (+d.total_revenue_usd / +d.total_units_sold - +d.avg_real_cost_usd)
-            : 0).toFixed(4)),
-          backgroundColor: COLORS.accent + "0.8)",
-          stack: "costs"
-        }
+        { label: 'Revenue USD', data: revenue, backgroundColor: 'rgba(124,106,247,0.7)' },
+        { label: 'Costo USD',   data: costo,   backgroundColor: 'rgba(255,187,0,0.7)' }
       ]
     },
-    options: {
-      ...chartDefaults,
-      scales: {
-        x: { ...chartDefaults.scales.x, stacked: true },
-        y: { ...chartDefaults.scales.y, stacked: true },
-      }
-    }
+    options: { responsive: true, indexAxis: 'y',
+               plugins: { legend: { labels: { color: '#e8f0f8' } } },
+               scales: { x: { ticks: { color: '#5a7a96' } }, y: { ticks: { color: '#5a7a96' } } } }
   });
 }
 
-// ─────────────────────────────────────────────────
-// Gráfica: desglose de costos por país
-// ─────────────────────────────────────────────────
 async function loadCostBreakdown() {
-  const data = await fetch(API + "/country_profitability").then(r => r.json());
-
-  new Chart(document.getElementById("chartCostBreakdown"), {
-    type: "bar",
+  const data = await fetchData("/cost_breakdown");
+  if (!data || data.error) return;
+  const labels = data.map(d => d.country_iso);
+  const costo  = data.map(d => parseFloat(d.costo_producto || 0));
+  const margen = data.map(d => parseFloat(d.margen_bruto || 0));
+  const ctx = document.getElementById('chartCostBreakdown').getContext('2d');
+  if (chartCostBreakdown) chartCostBreakdown.destroy();
+  chartCostBreakdown = new Chart(ctx, {
+    type: 'bar',
     data: {
-      labels: data.map(d => d.sale_country),
+      labels,
       datasets: [
-        {
-          label: "Costo Producto USD",
-          data: data.map(d => (+d.total_cost_usd - +d.total_shipping_usd - +d.total_permit_usd).toFixed(2)),
-          backgroundColor: COLORS.purple + "0.8)",
-          stack: "s"
-        },
-        {
-          label: "Envío USD",
-          data: data.map(d => +d.total_shipping_usd),
-          backgroundColor: COLORS.orange + "0.8)",
-          stack: "s"
-        },
-        {
-          label: "Permisos USD",
-          data: data.map(d => +d.total_permit_usd),
-          backgroundColor: COLORS.yellow + "0.8)",
-          stack: "s"
-        },
-        {
-          label: "Impuesto USD",
-          data: data.map(d => +d.tax_impact_usd),
-          backgroundColor: COLORS.red    + "0.7)",
-          stack: "s"
-        }
+        { label: 'Costo Producto', data: costo,  backgroundColor: 'rgba(255,68,102,0.7)', stack: 'a' },
+        { label: 'Margen Bruto',   data: margen, backgroundColor: 'rgba(0,212,170,0.7)',  stack: 'a' }
       ]
     },
-    options: {
-      ...chartDefaults,
-      scales: {
-        x: { ...chartDefaults.scales.x, stacked: true },
-        y: { ...chartDefaults.scales.y, stacked: true },
-      }
-    }
+    options: { responsive: true, plugins: { legend: { labels: { color: '#e8f0f8' } } },
+               scales: { x: { stacked: true, ticks: { color: '#5a7a96' } },
+                         y: { stacked: true, ticks: { color: '#5a7a96' } } } }
   });
 }
 
-// ─────────────────────────────────────────────────
-// Tabla: órdenes recientes
-// ─────────────────────────────────────────────────
 async function loadOrders() {
-  const data = await fetch(API + "/recent_orders").then(r => r.json());
+  const data = await fetchData("/recent_orders");
+  if (!data) return;
   const statusBadge = s => {
     const m = { CONFIRMADA:"green", EN_PREPARACION:"yellow", ENVIADA:"purple", ENTREGADA:"green", CANCELADA:"orange" };
     return `<span class="badge badge-${m[s]||'orange'}">${s}</span>`;
   };
-  const tbody = document.getElementById("orders-tbody");
-  tbody.innerHTML = data.map(d => `<tr>
-    <td>${d.order_date}</td>
-    <td><b>${d.brand_name}</b></td>
-    <td>${FLAGS[d.sale_country_iso]||""} ${d.sale_country}</td>
-    <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis">${d.branded_name}</td>
-    <td><span class="badge badge-purple">${d.category_name}</span></td>
-    <td>${d.quantity}</td>
-    <td>${parseFloat(d.unit_price_local).toLocaleString()} ${d.currency_code}</td>
-    <td class="num-positive">${usd(d.revenue_usd)}</td>
-    <td>${usd(d.real_cost_per_unit_usd)}</td>
-    <td class="${parseFloat(d.gross_margin_usd) >= 0 ? 'num-positive' : 'num-negative'}">${usd(d.gross_margin_usd)}</td>
-    <td class="${parseFloat(d.gross_margin_pct) > 20 ? 'num-positive' : ''}">${pct(d.gross_margin_pct)}</td>
-    <td>${statusBadge(d.order_status)}</td>
-  </tr>`).join("");
+  document.getElementById("orders-tbody").innerHTML = data.map(d => `
+    <tr>
+      <td>${new Date(d.order_date).toLocaleDateString()}</td>
+      <td><b>${d.brand_name}</b></td>
+      <td>${FLAGS[d.sale_country_iso]||""} ${d.sale_country}</td>
+      <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis">${d.branded_name}</td>
+      <td><span class="badge badge-purple">${d.category_name}</span></td>
+      <td>${d.quantity}</td>
+      <td>${parseFloat(d.unit_price_local).toLocaleString()} ${d.currency_code}</td>
+      <td class="num-positive">${usd(d.revenue_usd)}</td>
+      <td>${usd(d.real_cost_per_unit_usd)}</td>
+      <td class="${d.gross_margin_usd >= 0 ? 'num-positive' : 'num-negative'}">${usd(d.gross_margin_usd)}</td>
+      <td>${pct(d.gross_margin_pct)}</td>
+      <td>${statusBadge(d.order_status)}</td>
+    </tr>`).join("");
 }
 
-// ─────────────────────────────────────────────────
-// INIT
-// ─────────────────────────────────────────────────
 async function init() {
   await loadKPIs();
-  await Promise.all([
-    loadCountryChart(),
-    loadBrandChart(),
-    loadCategoryChart(),
-    loadCostBreakdown(),
-    loadOrders(),
-  ]);
+  // Cargar el resto en paralelo
+  Promise.all([loadCountryChart(), loadBrandChart(), loadCategoryChart(), loadCostBreakdown(), loadOrders()]);
 }
-
 init();
 </script>
 </body>

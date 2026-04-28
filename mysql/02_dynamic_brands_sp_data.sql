@@ -1,6 +1,8 @@
 -- =============================================================
 --  DYNAMIC BRANDS — Stored Procedures + Carga de Datos
 --  Database: dynamic_brands_db (MySQL 8.4)
+-- Forzar collation consistente con las tablas (utf8mb4_unicode_ci)
+SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
 --  Incluye:
 --    1. SP de logging independiente
 --    2. SPs transaccionales de inserción con manejo de excepciones
@@ -70,7 +72,7 @@ BEGIN
 
     CALL sp_log_process('sp_insert_country', CONCAT('Iniciando inserción de país: ', p_country_name), 'Countries', NULL, 'INFO', NULL);
 
-    SELECT COUNT(*) INTO v_exists FROM Countries WHERE iso_code = p_iso_code;
+    SELECT COUNT(*) INTO v_exists FROM Countries WHERE iso_code = p_iso_code COLLATE utf8mb4_unicode_ci;
 
     IF v_exists = 0 THEN
         INSERT INTO Countries (country_name, iso_code, currency_code, currency_symbol)
@@ -111,7 +113,7 @@ BEGIN
     CALL sp_log_process('sp_insert_exchange_rate', CONCAT('Insertando tipo de cambio para: ', p_iso_code), 'Exchange_rates', NULL, 'INFO', NULL);
 
     SELECT country_id, currency_code INTO v_country_id, v_currency
-    FROM Countries WHERE iso_code = p_iso_code LIMIT 1;
+    FROM Countries WHERE iso_code = p_iso_code COLLATE utf8mb4_unicode_ci LIMIT 1;
 
     IF v_country_id IS NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'País no encontrado para tipo de cambio';
@@ -156,7 +158,7 @@ BEGIN
 
     CALL sp_log_process('sp_insert_country_tax', CONCAT('Insertando impuesto para: ', p_iso_code), 'Country_taxes', NULL, 'INFO', NULL);
 
-    SELECT country_id INTO v_country_id FROM Countries WHERE iso_code = p_iso_code LIMIT 1;
+    SELECT country_id INTO v_country_id FROM Countries WHERE iso_code = p_iso_code COLLATE utf8mb4_unicode_ci LIMIT 1;
 
     IF v_country_id IS NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'País no encontrado para impuesto';
@@ -227,12 +229,12 @@ BEGIN
 
     CALL sp_log_process('sp_insert_website', CONCAT('Iniciando inserción de sitio: ', p_site_url), 'Websites', NULL, 'INFO', NULL);
 
-    SELECT brand_id INTO v_brand_id FROM Brands WHERE brand_name = p_brand_name AND is_deleted = 0 LIMIT 1;
+    SELECT brand_id INTO v_brand_id FROM Brands WHERE brand_name = p_brand_name COLLATE utf8mb4_unicode_ci AND is_deleted = 0 LIMIT 1;
     IF v_brand_id IS NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Marca no encontrada para el sitio web';
     END IF;
 
-    SELECT country_id INTO v_country_id FROM Countries WHERE iso_code = p_iso_code LIMIT 1;
+    SELECT country_id INTO v_country_id FROM Countries WHERE iso_code = p_iso_code COLLATE utf8mb4_unicode_ci LIMIT 1;
     IF v_country_id IS NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'País no encontrado para el sitio web';
     END IF;
@@ -265,7 +267,7 @@ BEGIN
         RESIGNAL;
     END;
 
-    SELECT COUNT(*) INTO v_exists FROM Couriers WHERE courier_name = p_courier_name;
+    SELECT COUNT(*) INTO v_exists FROM Couriers WHERE courier_name = p_courier_name COLLATE utf8mb4_unicode_ci;
 
     IF v_exists = 0 THEN
         INSERT INTO Couriers (courier_name, contact_info) VALUES (p_courier_name, p_contact_info);
@@ -283,6 +285,7 @@ DELIMITER ;
 -- =============================================================
 DROP PROCEDURE IF EXISTS sp_insert_customer;
 DELIMITER $$
+
 CREATE PROCEDURE sp_insert_customer(
     IN p_first_name   VARCHAR(80),
     IN p_last_name    VARCHAR(80),
@@ -292,11 +295,13 @@ CREATE PROCEDURE sp_insert_customer(
     IN p_address_line VARCHAR(300),
     IN p_city         VARCHAR(100)
 )
-BEGIN
+-- Agregamos la etiqueta al inicio del bloque principal
+proc_label: BEGIN 
     DECLARE v_country_id INT UNSIGNED DEFAULT NULL;
     DECLARE v_cust_id    INT UNSIGNED DEFAULT NULL;
     DECLARE v_addr_id    INT UNSIGNED DEFAULT NULL;
     DECLARE v_exists     INT DEFAULT 0;
+
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
         GET DIAGNOSTICS CONDITION 1 @errmsg = MESSAGE_TEXT;
@@ -306,13 +311,16 @@ BEGIN
 
     CALL sp_log_process('sp_insert_customer', CONCAT('Iniciando inserción cliente: ', p_email), 'Customers', NULL, 'INFO', NULL);
 
-    SELECT COUNT(*) INTO v_exists FROM Customers WHERE email = p_email;
+    -- Validación de existencia
+    SELECT COUNT(*) INTO v_exists FROM Customers WHERE email = p_email COLLATE utf8mb4_unicode_ci;
     IF v_exists > 0 THEN
         CALL sp_log_process('sp_insert_customer', CONCAT('Cliente ya existe: ', p_email), 'Customers', NULL, 'WARNING', NULL);
-        LEAVE sp_insert_customer;
+        -- Ahora sí, LEAVE coincide con la etiqueta del bloque
+        LEAVE proc_label;
     END IF;
 
-    SELECT country_id INTO v_country_id FROM Countries WHERE iso_code = p_iso_code LIMIT 1;
+    -- Validación de país
+    SELECT country_id INTO v_country_id FROM Countries WHERE iso_code = p_iso_code COLLATE utf8mb4_unicode_ci LIMIT 1;
     IF v_country_id IS NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'País no encontrado para el cliente';
     END IF;
@@ -330,15 +338,16 @@ BEGIN
     COMMIT;
 
     CALL sp_log_process('sp_insert_customer', CONCAT('Cliente insertado ID: ', v_cust_id, ' dirección ID: ', v_addr_id), 'Customers', v_cust_id, 'SUCCESS', NULL);
-END$$
+
+END proc_label$$ -- Cerramos con el nombre de la etiqueta
 DELIMITER ;
 
 -- =============================================================
 -- SP 8: sp_insert_catalog_product
--- Inserta un producto con identidad de marca blanca en el catálogo.
 -- =============================================================
 DROP PROCEDURE IF EXISTS sp_insert_catalog_product;
 DELIMITER $$
+
 CREATE PROCEDURE sp_insert_catalog_product(
     IN p_etheria_product_id  INT UNSIGNED,
     IN p_brand_name          VARCHAR(150),
@@ -346,10 +355,12 @@ CREATE PROCEDURE sp_insert_catalog_product(
     IN p_branded_description TEXT,
     IN p_health_claims       TEXT
 )
-BEGIN
+-- Agregamos la etiqueta para que LEAVE funcione
+proc_catalog: BEGIN 
     DECLARE v_brand_id INT UNSIGNED DEFAULT NULL;
     DECLARE v_id       INT UNSIGNED DEFAULT NULL;
     DECLARE v_exists   INT DEFAULT 0;
+
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
         GET DIAGNOSTICS CONDITION 1 @errmsg = MESSAGE_TEXT;
@@ -359,7 +370,7 @@ BEGIN
 
     CALL sp_log_process('sp_insert_catalog_product', CONCAT('Insertando producto catálogo: ', p_branded_name, ' marca: ', p_brand_name), 'Product_catalog', NULL, 'INFO', NULL);
 
-    SELECT brand_id INTO v_brand_id FROM Brands WHERE brand_name = p_brand_name AND is_deleted = 0 LIMIT 1;
+    SELECT brand_id INTO v_brand_id FROM Brands WHERE brand_name = p_brand_name COLLATE utf8mb4_unicode_ci AND is_deleted = 0 LIMIT 1;
     IF v_brand_id IS NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Marca no encontrada para producto catálogo';
     END IF;
@@ -367,7 +378,8 @@ BEGIN
     SELECT COUNT(*) INTO v_exists FROM Product_catalog WHERE etheria_product_id = p_etheria_product_id AND brand_id = v_brand_id;
     IF v_exists > 0 THEN
         CALL sp_log_process('sp_insert_catalog_product', CONCAT('Producto catálogo ya existe: ', p_branded_name), 'Product_catalog', NULL, 'WARNING', NULL);
-        LEAVE sp_insert_catalog_product;
+        -- Usamos la etiqueta definida arriba
+        LEAVE proc_catalog;
     END IF;
 
     INSERT INTO Product_catalog (etheria_product_id, brand_id, branded_name, branded_description, health_claims)
@@ -375,7 +387,8 @@ BEGIN
 
     SET v_id = LAST_INSERT_ID();
     CALL sp_log_process('sp_insert_catalog_product', CONCAT('Producto catálogo insertado ID: ', v_id), 'Product_catalog', v_id, 'SUCCESS', NULL);
-END$$
+
+END proc_catalog$$
 DELIMITER ;
 
 -- =============================================================
@@ -408,18 +421,18 @@ BEGIN
 
     CALL sp_log_process('sp_publish_product_on_website', CONCAT('Publicando: ', p_branded_name, ' en ', p_site_url), 'Website_products', NULL, 'INFO', NULL);
 
-    SELECT website_id INTO v_website_id FROM Websites WHERE site_url = p_site_url AND is_deleted = 0 LIMIT 1;
+    SELECT website_id INTO v_website_id FROM Websites WHERE site_url = p_site_url COLLATE utf8mb4_unicode_ci AND is_deleted = 0 LIMIT 1;
     IF v_website_id IS NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Sitio web no encontrado';
     END IF;
 
-    SELECT brand_id INTO v_brand_id FROM Brands WHERE brand_name = p_brand_name AND is_deleted = 0 LIMIT 1;
+    SELECT brand_id INTO v_brand_id FROM Brands WHERE brand_name = p_brand_name COLLATE utf8mb4_unicode_ci AND is_deleted = 0 LIMIT 1;
     IF v_brand_id IS NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Marca no encontrada al publicar producto';
     END IF;
 
     SELECT catalog_product_id INTO v_catalog_id FROM Product_catalog
-    WHERE branded_name = p_branded_name AND brand_id = v_brand_id AND is_deleted = 0 LIMIT 1;
+    WHERE branded_name = p_branded_name COLLATE utf8mb4_unicode_ci AND brand_id = v_brand_id AND is_deleted = 0 LIMIT 1;
     IF v_catalog_id IS NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Producto catálogo no encontrado para publicación';
     END IF;
@@ -493,7 +506,7 @@ BEGIN
     CALL sp_log_process('sp_register_order', CONCAT('Iniciando orden: cliente=', p_customer_email, ' sitio=', p_site_url), 'Orders', NULL, 'INFO', NULL);
 
     -- Resolver cliente y dirección
-    SELECT customer_id INTO v_customer_id FROM Customers WHERE email = p_customer_email AND is_deleted = 0 LIMIT 1;
+    SELECT customer_id INTO v_customer_id FROM Customers WHERE email = p_customer_email COLLATE utf8mb4_unicode_ci AND is_deleted = 0 LIMIT 1;
     IF v_customer_id IS NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Cliente no encontrado';
     END IF;
@@ -506,7 +519,7 @@ BEGIN
 
     -- Resolver sitio y país
     SELECT website_id, country_id INTO v_website_id, v_country_id
-    FROM Websites WHERE site_url = p_site_url AND is_deleted = 0 LIMIT 1;
+    FROM Websites WHERE site_url = p_site_url COLLATE utf8mb4_unicode_ci AND is_deleted = 0 LIMIT 1;
     IF v_website_id IS NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Sitio web no encontrado';
     END IF;
@@ -520,11 +533,11 @@ BEGIN
     END IF;
 
     -- Resolver producto publicado y precio
-    SELECT brand_id INTO v_brand_id FROM Brands WHERE brand_name = p_brand_name AND is_deleted = 0 LIMIT 1;
+    SELECT brand_id INTO v_brand_id FROM Brands WHERE brand_name = p_brand_name COLLATE utf8mb4_unicode_ci AND is_deleted = 0 LIMIT 1;
 
     SELECT pc.catalog_product_id INTO v_catalog_id
     FROM Product_catalog pc
-    WHERE pc.branded_name = p_branded_name AND pc.brand_id = v_brand_id AND pc.is_deleted = 0 LIMIT 1;
+    WHERE pc.branded_name = p_branded_name COLLATE utf8mb4_unicode_ci AND pc.brand_id = v_brand_id AND pc.is_deleted = 0 LIMIT 1;
 
     SELECT wp.website_product_id INTO v_wp_id
     FROM Website_products wp
@@ -547,7 +560,7 @@ BEGIN
     SET v_total_usd    = v_total_local / v_rate;
 
     -- Resolver courier
-    SELECT courier_id INTO v_courier_id FROM Couriers WHERE courier_name = p_courier_name AND is_active = 1 LIMIT 1;
+    SELECT courier_id INTO v_courier_id FROM Couriers WHERE courier_name = p_courier_name COLLATE utf8mb4_unicode_ci AND is_active = 1 LIMIT 1;
     IF v_courier_id IS NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Courier no encontrado';
     END IF;
