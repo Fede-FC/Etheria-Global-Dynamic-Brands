@@ -1,6 +1,7 @@
 -- =============================================================
---  DYNAMIC BRANDS — MySQL 8.4 — Stored Procedures + Datos
---  Carga: 5 países, 9 sitios, marcas, clientes, órdenes
+--  DYNAMIC BRANDS — MySQL 8.4 — Stored Procedures v4
+--  Patrones: UPSERT granular, INOUT params, EXIT HANDLER,
+--  transacciones explícitas, LAST_INSERT_ID para retorno.
 -- =============================================================
 USE dynamic_brands_db;
 
@@ -21,45 +22,379 @@ END //
 DELIMITER ;
 
 -- =============================================================
--- SP 1 — Catálogos
+-- UPSERT: Currencies
+-- =============================================================
+DROP PROCEDURE IF EXISTS sp_upsert_currency;
+DELIMITER //
+CREATE PROCEDURE sp_upsert_currency(
+    IN  p_code          CHAR(3),
+    IN  p_name          VARCHAR(80),
+    IN  p_symbol        VARCHAR(5),
+    IN  p_is_base       TINYINT(1),
+    OUT p_currency_id   INT UNSIGNED
+)
+BEGIN
+    DECLARE v_existing INT UNSIGNED;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        GET DIAGNOSTICS CONDITION 1 @err = MESSAGE_TEXT;
+        CALL sp_log('sp_upsert_currency','ERROR','Currencies',NULL,p_code||' '||@err,'ERROR',@err);
+        RESIGNAL;
+    END;
+
+    SELECT currency_id INTO v_existing FROM Currencies WHERE currency_code = p_code;
+    IF v_existing IS NULL THEN
+        INSERT INTO Currencies(currency_code,currency_name,currency_symbol,is_base)
+        VALUES(p_code,p_name,p_symbol,p_is_base);
+        SET p_currency_id = LAST_INSERT_ID();
+        CALL sp_log('sp_upsert_currency','INSERT','Currencies',p_currency_id,p_name,'SUCCESS',NULL);
+    ELSE
+        UPDATE Currencies SET currency_name=p_name,currency_symbol=COALESCE(p_symbol,currency_symbol),is_base=p_is_base
+        WHERE currency_id=v_existing;
+        SET p_currency_id = v_existing;
+        CALL sp_log('sp_upsert_currency','UPDATE','Currencies',p_currency_id,p_name,'SUCCESS',NULL);
+    END IF;
+END //
+DELIMITER ;
+
+-- =============================================================
+-- UPSERT: Countries
+-- =============================================================
+DROP PROCEDURE IF EXISTS sp_upsert_country;
+DELIMITER //
+CREATE PROCEDURE sp_upsert_country(
+    IN  p_name          VARCHAR(100),
+    IN  p_iso           CHAR(3),
+    IN  p_cur_id        INT UNSIGNED,
+    OUT p_country_id    INT UNSIGNED
+)
+BEGIN
+    DECLARE v_existing INT UNSIGNED;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        GET DIAGNOSTICS CONDITION 1 @err = MESSAGE_TEXT;
+        CALL sp_log('sp_upsert_country','ERROR','Countries',NULL,p_iso||' '||@err,'ERROR',@err);
+        RESIGNAL;
+    END;
+
+    SELECT country_id INTO v_existing FROM Countries WHERE iso_code = p_iso;
+    IF v_existing IS NULL THEN
+        INSERT INTO Countries(country_name,iso_code,currency_id) VALUES(p_name,p_iso,p_cur_id);
+        SET p_country_id = LAST_INSERT_ID();
+        CALL sp_log('sp_upsert_country','INSERT','Countries',p_country_id,p_name,'SUCCESS',NULL);
+    ELSE
+        UPDATE Countries SET country_name=p_name,currency_id=p_cur_id WHERE country_id=v_existing;
+        SET p_country_id = v_existing;
+        CALL sp_log('sp_upsert_country','UPDATE','Countries',p_country_id,p_name,'SUCCESS',NULL);
+    END IF;
+END //
+DELIMITER ;
+
+-- =============================================================
+-- UPSERT: States
+-- =============================================================
+DROP PROCEDURE IF EXISTS sp_upsert_state;
+DELIMITER //
+CREATE PROCEDURE sp_upsert_state(
+    IN  p_country_id    INT UNSIGNED,
+    IN  p_name          VARCHAR(100),
+    IN  p_code          VARCHAR(10),
+    OUT p_state_id      INT UNSIGNED
+)
+BEGIN
+    DECLARE v_existing INT UNSIGNED;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        GET DIAGNOSTICS CONDITION 1 @err = MESSAGE_TEXT;
+        RESIGNAL;
+    END;
+
+    SELECT state_id INTO v_existing FROM States WHERE country_id=p_country_id AND state_code=p_code;
+    IF v_existing IS NULL THEN
+        INSERT INTO States(country_id,state_name,state_code) VALUES(p_country_id,p_name,p_code);
+        SET p_state_id = LAST_INSERT_ID();
+    ELSE
+        UPDATE States SET state_name=p_name WHERE state_id=v_existing;
+        SET p_state_id = v_existing;
+    END IF;
+END //
+DELIMITER ;
+
+-- =============================================================
+-- UPSERT: Cities
+-- =============================================================
+DROP PROCEDURE IF EXISTS sp_upsert_city;
+DELIMITER //
+CREATE PROCEDURE sp_upsert_city(
+    IN  p_state_id      INT UNSIGNED,
+    IN  p_name          VARCHAR(100),
+    OUT p_city_id       INT UNSIGNED
+)
+BEGIN
+    DECLARE v_existing INT UNSIGNED;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        GET DIAGNOSTICS CONDITION 1 @err = MESSAGE_TEXT;
+        RESIGNAL;
+    END;
+
+    SELECT city_id INTO v_existing FROM Cities WHERE state_id=p_state_id AND city_name=p_name;
+    IF v_existing IS NULL THEN
+        INSERT INTO Cities(state_id,city_name) VALUES(p_state_id,p_name);
+        SET p_city_id = LAST_INSERT_ID();
+    ELSE
+        SET p_city_id = v_existing;
+    END IF;
+END //
+DELIMITER ;
+
+-- =============================================================
+-- UPSERT: Order Statuses
+-- =============================================================
+DROP PROCEDURE IF EXISTS sp_upsert_order_status;
+DELIMITER //
+CREATE PROCEDURE sp_upsert_order_status(
+    IN  p_code          VARCHAR(30),
+    IN  p_desc          VARCHAR(150),
+    OUT p_status_id     INT UNSIGNED
+)
+BEGIN
+    DECLARE v_existing INT UNSIGNED;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN RESIGNAL; END;
+
+    SELECT status_id INTO v_existing FROM Order_statuses WHERE status_code=p_code;
+    IF v_existing IS NULL THEN
+        INSERT INTO Order_statuses(status_code,description) VALUES(p_code,p_desc);
+        SET p_status_id = LAST_INSERT_ID();
+    ELSE
+        SET p_status_id = v_existing;
+    END IF;
+END //
+DELIMITER ;
+
+-- =============================================================
+-- UPSERT: Shipping Statuses
+-- =============================================================
+DROP PROCEDURE IF EXISTS sp_upsert_shipping_status;
+DELIMITER //
+CREATE PROCEDURE sp_upsert_shipping_status(
+    IN  p_code          VARCHAR(30),
+    IN  p_desc          VARCHAR(150),
+    OUT p_status_id     INT UNSIGNED
+)
+BEGIN
+    DECLARE v_existing INT UNSIGNED;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN RESIGNAL; END;
+
+    SELECT status_id INTO v_existing FROM Shipping_statuses WHERE status_code=p_code;
+    IF v_existing IS NULL THEN
+        INSERT INTO Shipping_statuses(status_code,description) VALUES(p_code,p_desc);
+        SET p_status_id = LAST_INSERT_ID();
+    ELSE
+        SET p_status_id = v_existing;
+    END IF;
+END //
+DELIMITER ;
+
+-- =============================================================
+-- UPSERT: Brand Focuses
+-- =============================================================
+DROP PROCEDURE IF EXISTS sp_upsert_brand_focus;
+DELIMITER //
+CREATE PROCEDURE sp_upsert_brand_focus(
+    IN  p_code          VARCHAR(30),
+    IN  p_name          VARCHAR(100),
+    OUT p_focus_id      INT UNSIGNED
+)
+BEGIN
+    DECLARE v_existing INT UNSIGNED;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN RESIGNAL; END;
+
+    SELECT focus_id INTO v_existing FROM Brand_focuses WHERE focus_code=p_code;
+    IF v_existing IS NULL THEN
+        INSERT INTO Brand_focuses(focus_code,focus_name) VALUES(p_code,p_name);
+        SET p_focus_id = LAST_INSERT_ID();
+    ELSE
+        SET p_focus_id = v_existing;
+    END IF;
+END //
+DELIMITER ;
+
+-- =============================================================
+-- UPSERT: Couriers
+-- =============================================================
+DROP PROCEDURE IF EXISTS sp_upsert_courier;
+DELIMITER //
+CREATE PROCEDURE sp_upsert_courier(
+    IN  p_name          VARCHAR(100),
+    IN  p_contact       VARCHAR(200),
+    OUT p_courier_id    INT UNSIGNED
+)
+BEGIN
+    DECLARE v_existing INT UNSIGNED;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN RESIGNAL; END;
+
+    SELECT courier_id INTO v_existing FROM Couriers WHERE courier_name=p_name;
+    IF v_existing IS NULL THEN
+        INSERT INTO Couriers(courier_name,contact_info) VALUES(p_name,p_contact);
+        SET p_courier_id = LAST_INSERT_ID();
+    ELSE
+        SET p_courier_id = v_existing;
+    END IF;
+END //
+DELIMITER ;
+
+-- =============================================================
+-- UPSERT: Exchange Rates
+-- =============================================================
+DROP PROCEDURE IF EXISTS sp_upsert_exchange_rate;
+DELIMITER //
+CREATE PROCEDURE sp_upsert_exchange_rate(
+    IN  p_cur_id            INT UNSIGNED,
+    IN  p_base_cur_id       INT UNSIGNED,
+    IN  p_rate              DECIMAL(18,6),
+    IN  p_date              DATE,
+    IN  p_source            VARCHAR(100),
+    OUT p_exchange_rate_id  INT UNSIGNED
+)
+BEGIN
+    DECLARE v_existing INT UNSIGNED;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN RESIGNAL; END;
+
+    SELECT exchange_rate_id INTO v_existing FROM Exchange_rates
+    WHERE currency_id=p_cur_id AND base_currency_id=p_base_cur_id AND rate_date=p_date;
+    IF v_existing IS NULL THEN
+        INSERT INTO Exchange_rates(currency_id,base_currency_id,rate,rate_date,source)
+        VALUES(p_cur_id,p_base_cur_id,p_rate,p_date,p_source);
+        SET p_exchange_rate_id = LAST_INSERT_ID();
+    ELSE
+        UPDATE Exchange_rates SET rate=p_rate,source=p_source WHERE exchange_rate_id=v_existing;
+        SET p_exchange_rate_id = v_existing;
+    END IF;
+END //
+DELIMITER ;
+
+-- =============================================================
+-- UPSERT: Brands
+-- =============================================================
+DROP PROCEDURE IF EXISTS sp_upsert_brand;
+DELIMITER //
+CREATE PROCEDURE sp_upsert_brand(
+    IN  p_name          VARCHAR(150),
+    IN  p_focus_id      INT UNSIGNED,
+    IN  p_ai_model      VARCHAR(50),
+    IN  p_ai_params     JSON,
+    IN  p_generated     TIMESTAMP,
+    OUT p_brand_id      INT UNSIGNED
+)
+BEGIN
+    DECLARE v_existing INT UNSIGNED;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN RESIGNAL; END;
+
+    SELECT brand_id INTO v_existing FROM Brands WHERE brand_name=p_name;
+    IF v_existing IS NULL THEN
+        INSERT INTO Brands(brand_name,focus_id,ai_model_version,ai_generation_params,generated_at)
+        VALUES(p_name,p_focus_id,p_ai_model,p_ai_params,p_generated);
+        SET p_brand_id = LAST_INSERT_ID();
+        CALL sp_log('sp_upsert_brand','INSERT','Brands',p_brand_id,p_name,'SUCCESS',NULL);
+    ELSE
+        UPDATE Brands SET focus_id=p_focus_id,ai_model_version=p_ai_model WHERE brand_id=v_existing;
+        SET p_brand_id = v_existing;
+        CALL sp_log('sp_upsert_brand','UPDATE','Brands',p_brand_id,p_name,'SUCCESS',NULL);
+    END IF;
+END //
+DELIMITER ;
+
+-- =============================================================
+-- UPSERT: Customers
+-- =============================================================
+DROP PROCEDURE IF EXISTS sp_upsert_customer;
+DELIMITER //
+CREATE PROCEDURE sp_upsert_customer(
+    IN  p_first         VARCHAR(80),
+    IN  p_last          VARCHAR(80),
+    IN  p_email         VARCHAR(150),
+    IN  p_phone         VARCHAR(30),
+    IN  p_country_id    INT UNSIGNED,
+    OUT p_customer_id   INT UNSIGNED
+)
+BEGIN
+    DECLARE v_existing INT UNSIGNED;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN RESIGNAL; END;
+
+    SELECT customer_id INTO v_existing FROM Customers WHERE email=p_email;
+    IF v_existing IS NULL THEN
+        INSERT INTO Customers(first_name,last_name,email,phone,country_id)
+        VALUES(p_first,p_last,p_email,p_phone,p_country_id);
+        SET p_customer_id = LAST_INSERT_ID();
+    ELSE
+        UPDATE Customers SET first_name=p_first,last_name=p_last,phone=p_phone,country_id=p_country_id
+        WHERE customer_id=v_existing;
+        SET p_customer_id = v_existing;
+    END IF;
+END //
+DELIMITER ;
+
+-- =============================================================
+-- SP 1 — Catálogos (orquestador de UPSERTs)
 -- =============================================================
 DROP PROCEDURE IF EXISTS sp_insert_catalogs;
 DELIMITER //
 CREATE PROCEDURE sp_insert_catalogs()
 BEGIN
+    DECLARE v_dummy INT UNSIGNED;
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
         GET DIAGNOSTICS CONDITION 1 @err = MESSAGE_TEXT;
-        CALL sp_log('sp_insert_catalogs', 'Error en catálogos', NULL, NULL, 'ERROR', @err);
+        CALL sp_log('sp_insert_catalogs','Error en catálogos',NULL,NULL,'ERROR',@err);
         RESIGNAL;
     END;
 
-    INSERT IGNORE INTO Currencies(currency_code, currency_name, currency_symbol, is_base) VALUES
-        ('USD','US Dollar','$',1),('COP','Peso Colombiano','$',0),('PEN','Sol Peruano','S/',0),
-        ('MXN','Peso Mexicano','$',0),('CLP','Peso Chileno','$',0),('CRC','Colón Costarricense','₡',0);
+    -- Currencies
+    CALL sp_upsert_currency('USD','US Dollar','$',1,v_dummy);
+    CALL sp_upsert_currency('COP','Peso Colombiano','$',0,v_dummy);
+    CALL sp_upsert_currency('PEN','Sol Peruano','S/',0,v_dummy);
+    CALL sp_upsert_currency('MXN','Peso Mexicano','$',0,v_dummy);
+    CALL sp_upsert_currency('CLP','Peso Chileno','$',0,v_dummy);
+    CALL sp_upsert_currency('CRC','Colón Costarricense','₡',0,v_dummy);
 
-    INSERT IGNORE INTO Order_statuses(status_code, description) VALUES
-        ('PENDING','Orden recibida'),('CONFIRMED','Pago confirmado'),('PROCESSING','En preparación'),
-        ('SHIPPED','Enviado'),('DELIVERED','Entregado'),('CANCELLED','Cancelada'),('REFUNDED','Reembolsada');
+    -- Order Statuses
+    CALL sp_upsert_order_status('PENDING','Orden recibida',v_dummy);
+    CALL sp_upsert_order_status('CONFIRMED','Pago confirmado',v_dummy);
+    CALL sp_upsert_order_status('PROCESSING','En preparación',v_dummy);
+    CALL sp_upsert_order_status('SHIPPED','Enviado',v_dummy);
+    CALL sp_upsert_order_status('DELIVERED','Entregado',v_dummy);
+    CALL sp_upsert_order_status('CANCELLED','Cancelada',v_dummy);
+    CALL sp_upsert_order_status('REFUNDED','Reembolsada',v_dummy);
 
-    INSERT IGNORE INTO Shipping_statuses(status_code, description) VALUES
-        ('PENDING','Pendiente'),('PICKED_UP','Recojo HUB'),('IN_TRANSIT','En tránsito'),
-        ('DELIVERED','Entregado'),('RETURNED','Devuelto');
+    -- Shipping Statuses
+    CALL sp_upsert_shipping_status('PENDING','Pendiente',v_dummy);
+    CALL sp_upsert_shipping_status('PICKED_UP','Recojo HUB',v_dummy);
+    CALL sp_upsert_shipping_status('IN_TRANSIT','En tránsito',v_dummy);
+    CALL sp_upsert_shipping_status('DELIVERED','Entregado',v_dummy);
+    CALL sp_upsert_shipping_status('RETURNED','Devuelto',v_dummy);
 
-    INSERT IGNORE INTO Brand_focuses(focus_code, focus_name) VALUES
-        ('WELLNESS','Bienestar integral'),('AROMATHERAPY','Aromaterapia'),('ECO_GREEN','Ecológico'),
-        ('DERMA_CARE','Dermatológico premium'),('HAIR_LUXURY','Lujo capilar'),('NATURAL_FOOD','Alimentación natural');
+    -- Brand Focuses
+    CALL sp_upsert_brand_focus('WELLNESS','Bienestar integral',v_dummy);
+    CALL sp_upsert_brand_focus('AROMATHERAPY','Aromaterapia',v_dummy);
+    CALL sp_upsert_brand_focus('ECO_GREEN','Ecológico',v_dummy);
+    CALL sp_upsert_brand_focus('DERMA_CARE','Dermatológico premium',v_dummy);
+    CALL sp_upsert_brand_focus('HAIR_LUXURY','Lujo capilar',v_dummy);
+    CALL sp_upsert_brand_focus('NATURAL_FOOD','Alimentación natural',v_dummy);
 
-    INSERT IGNORE INTO Couriers(courier_name, contact_info) VALUES
-        ('DHL Express','logistics@dhl.com'),('FedEx International','shipping@fedex.com'),
-        ('UPS Worldwide','pickup@ups.com'),('Servientrega Latam','contacto@servientrega.com'),('99Minutos','envios@99minutos.com');
+    -- Couriers
+    CALL sp_upsert_courier('DHL Express','logistics@dhl.com',v_dummy);
+    CALL sp_upsert_courier('FedEx International','shipping@fedex.com',v_dummy);
+    CALL sp_upsert_courier('UPS Worldwide','pickup@ups.com',v_dummy);
+    CALL sp_upsert_courier('Servientrega Latam','contacto@servientrega.com',v_dummy);
+    CALL sp_upsert_courier('99Minutos','envios@99minutos.com',v_dummy);
 
     CALL sp_log('sp_insert_catalogs','Catálogos insertados','Currencies',NULL,'SUCCESS',NULL);
 END //
 DELIMITER ;
 
 -- =============================================================
--- SP 2 — Geografía (5 países Latam)
+-- SP 2 — Geografía (con UPSERT chaining)
 -- =============================================================
 DROP PROCEDURE IF EXISTS sp_insert_geography;
 DELIMITER //
@@ -68,6 +403,9 @@ BEGIN
     DECLARE v_cur_usd INT UNSIGNED; DECLARE v_cur_cop INT UNSIGNED;
     DECLARE v_cur_pen INT UNSIGNED; DECLARE v_cur_mxn INT UNSIGNED;
     DECLARE v_cur_clp INT UNSIGNED; DECLARE v_cur_crc INT UNSIGNED;
+    DECLARE v_cid_col INT UNSIGNED; DECLARE v_cid_per INT UNSIGNED; DECLARE v_cid_mex INT UNSIGNED;
+    DECLARE v_cid_chl INT UNSIGNED; DECLARE v_cid_cri INT UNSIGNED;
+    DECLARE v_st INT UNSIGNED; DECLARE v_city INT UNSIGNED;
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
         GET DIAGNOSTICS CONDITION 1 @err = MESSAGE_TEXT;
@@ -75,30 +413,43 @@ BEGIN
         RESIGNAL;
     END;
 
+    SELECT currency_id INTO v_cur_usd FROM Currencies WHERE currency_code='USD';
     SELECT currency_id INTO v_cur_cop FROM Currencies WHERE currency_code='COP';
     SELECT currency_id INTO v_cur_pen FROM Currencies WHERE currency_code='PEN';
     SELECT currency_id INTO v_cur_mxn FROM Currencies WHERE currency_code='MXN';
     SELECT currency_id INTO v_cur_clp FROM Currencies WHERE currency_code='CLP';
     SELECT currency_id INTO v_cur_crc FROM Currencies WHERE currency_code='CRC';
 
-    INSERT IGNORE INTO Countries(country_name,iso_code,currency_id) VALUES
-        ('Colombia','COL',v_cur_cop),('Perú','PER',v_cur_pen),('México','MEX',v_cur_mxn),
-        ('Chile','CHL',v_cur_clp),('Costa Rica','CRI',v_cur_crc);
+    -- Countries via UPSERT
+    CALL sp_upsert_country('Colombia','COL',v_cur_cop,v_cid_col);
+    CALL sp_upsert_country('Perú','PER',v_cur_pen,v_cid_per);
+    CALL sp_upsert_country('México','MEX',v_cur_mxn,v_cid_mex);
+    CALL sp_upsert_country('Chile','CHL',v_cur_clp,v_cid_chl);
+    CALL sp_upsert_country('Costa Rica','CRI',v_cur_crc,v_cid_cri);
 
-    INSERT IGNORE INTO States(country_id,state_name,state_code)
-    SELECT c.country_id,st.sname,st.scode FROM Countries c JOIN (
-        SELECT 'COL' i,'Cundinamarca' sname,'CUN' scode UNION SELECT 'COL','Antioquia','ANT'
-        UNION SELECT 'PER','Lima','LIM' UNION SELECT 'PER','Arequipa','AQP'
-        UNION SELECT 'MEX','Ciudad de México','CDMX' UNION SELECT 'MEX','Jalisco','JAL'
-        UNION SELECT 'CHL','Región Metropolitana','RM' UNION SELECT 'CHL','Valparaíso','VAL'
-        UNION SELECT 'CRI','San José','SJ'
-    ) st ON c.iso_code=st.i;
+    -- States
+    CALL sp_upsert_state(v_cid_col,'Cundinamarca','CUN',v_st);
+    CALL sp_upsert_state(v_cid_col,'Antioquia','ANT',v_st);
+    CALL sp_upsert_state(v_cid_per,'Lima','LIM',v_st);
+    CALL sp_upsert_state(v_cid_per,'Arequipa','AQP',v_st);
+    CALL sp_upsert_state(v_cid_mex,'Ciudad de México','CDMX',v_st);
+    CALL sp_upsert_state(v_cid_mex,'Jalisco','JAL',v_st);
+    CALL sp_upsert_state(v_cid_chl,'Región Metropolitana','RM',v_st);
+    CALL sp_upsert_state(v_cid_chl,'Valparaíso','VAL',v_st);
+    CALL sp_upsert_state(v_cid_cri,'San José','SJ',v_st);
+    CALL sp_upsert_state(v_cid_cri,'Alajuela','AL',v_st);
 
-    INSERT IGNORE INTO Cities(state_id,city_name)
-    SELECT s.state_id,ci.cn FROM States s JOIN (
-        SELECT 'CUN' sc,'Bogotá' cn UNION SELECT 'LIM','Lima' UNION SELECT 'CDMX','Ciudad de México'
-        UNION SELECT 'RM','Santiago' UNION SELECT 'SJ','San José'
-    ) ci ON s.state_code=ci.sc;
+    -- Cities
+    SELECT state_id INTO v_st FROM States WHERE state_code='CUN';
+    CALL sp_upsert_city(v_st,'Bogotá',v_city);
+    SELECT state_id INTO v_st FROM States WHERE state_code='LIM';
+    CALL sp_upsert_city(v_st,'Lima',v_city);
+    SELECT state_id INTO v_st FROM States WHERE state_code='CDMX';
+    CALL sp_upsert_city(v_st,'Ciudad de México',v_city);
+    SELECT state_id INTO v_st FROM States WHERE state_code='RM';
+    CALL sp_upsert_city(v_st,'Santiago',v_city);
+    SELECT state_id INTO v_st FROM States WHERE state_code='SJ';
+    CALL sp_upsert_city(v_st,'San José',v_city);
 
     CALL sp_log('sp_insert_geography','5 países insertados','Countries',NULL,'SUCCESS',NULL);
 END //
@@ -114,6 +465,7 @@ BEGIN
     DECLARE v_usd INT UNSIGNED; DECLARE v_cop INT UNSIGNED;
     DECLARE v_pen INT UNSIGNED; DECLARE v_mxn INT UNSIGNED;
     DECLARE v_clp INT UNSIGNED; DECLARE v_crc INT UNSIGNED;
+    DECLARE v_dummy INT UNSIGNED;
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
         GET DIAGNOSTICS CONDITION 1 @err = MESSAGE_TEXT;
@@ -128,20 +480,25 @@ BEGIN
     SELECT currency_id INTO v_clp FROM Currencies WHERE currency_code='CLP';
     SELECT currency_id INTO v_crc FROM Currencies WHERE currency_code='CRC';
 
-    INSERT IGNORE INTO Exchange_rates(currency_id,base_currency_id,rate,rate_date,source) VALUES
-        (v_usd,v_usd,1.000000,'2025-01-01','Sistema'),(v_cop,v_usd,4150.000000,'2025-01-01','Banco Rep'),
-        (v_pen,v_usd,3.720000,'2025-01-01','BCRP'),(v_mxn,v_usd,17.150000,'2025-01-01','Banxico'),
-        (v_clp,v_usd,920.000000,'2025-01-01','BCChile'),(v_crc,v_usd,515.000000,'2025-01-01','BCCR'),
-        (v_usd,v_usd,1.000000,'2025-06-01','Sistema'),(v_cop,v_usd,4200.000000,'2025-06-01','Banco Rep'),
-        (v_pen,v_usd,3.750000,'2025-06-01','BCRP'),(v_mxn,v_usd,17.500000,'2025-06-01','Banxico'),
-        (v_clp,v_usd,940.000000,'2025-06-01','BCChile'),(v_crc,v_usd,520.000000,'2025-06-01','BCCR');
+    CALL sp_upsert_exchange_rate(v_usd,v_usd,1.000000,'2025-01-01','Sistema',v_dummy);
+    CALL sp_upsert_exchange_rate(v_cop,v_usd,4150.000000,'2025-01-01','Banco Rep',v_dummy);
+    CALL sp_upsert_exchange_rate(v_pen,v_usd,3.720000,'2025-01-01','BCRP',v_dummy);
+    CALL sp_upsert_exchange_rate(v_mxn,v_usd,17.150000,'2025-01-01','Banxico',v_dummy);
+    CALL sp_upsert_exchange_rate(v_clp,v_usd,920.000000,'2025-01-01','BCChile',v_dummy);
+    CALL sp_upsert_exchange_rate(v_crc,v_usd,515.000000,'2025-01-01','BCCR',v_dummy);
+    CALL sp_upsert_exchange_rate(v_usd,v_usd,1.000000,'2025-06-01','Sistema',v_dummy);
+    CALL sp_upsert_exchange_rate(v_cop,v_usd,4200.000000,'2025-06-01','Banco Rep',v_dummy);
+    CALL sp_upsert_exchange_rate(v_pen,v_usd,3.750000,'2025-06-01','BCRP',v_dummy);
+    CALL sp_upsert_exchange_rate(v_mxn,v_usd,17.500000,'2025-06-01','Banxico',v_dummy);
+    CALL sp_upsert_exchange_rate(v_clp,v_usd,940.000000,'2025-06-01','BCChile',v_dummy);
+    CALL sp_upsert_exchange_rate(v_crc,v_usd,520.000000,'2025-06-01','BCCR',v_dummy);
 
     CALL sp_log('sp_insert_exchange_rates','Tipos de cambio insertados','Exchange_rates',NULL,'SUCCESS',NULL);
 END //
 DELIMITER ;
 
 -- =============================================================
--- SP 4 — Marcas y 9 Sitios Web
+-- SP 4 — Marcas y Sitios Web
 -- =============================================================
 DROP PROCEDURE IF EXISTS sp_insert_brands_websites;
 DELIMITER //
@@ -176,24 +533,15 @@ BEGIN
     SELECT status_id INTO v_st_a FROM Order_statuses WHERE status_code='CONFIRMED';
     SELECT status_id INTO v_st_p FROM Order_statuses WHERE status_code='PENDING';
 
-    INSERT INTO Brands(brand_name,focus_id,ai_model_version,ai_generation_params,generated_at)
-    VALUES ('Vivanatura',v_fw,'AI-Gen-3.2','{"style":"organic"}','2025-01-01 10:00:00');
-    SET v_bv=LAST_INSERT_ID();
-    INSERT INTO Brands(brand_name,focus_id,ai_model_version,ai_generation_params,generated_at)
-    VALUES ('ZenAromatics',v_fa,'AI-Gen-3.2','{"style":"zen"}','2025-01-01 10:05:00');
-    SET v_bz=LAST_INSERT_ID();
-    INSERT INTO Brands(brand_name,focus_id,ai_model_version,ai_generation_params,generated_at)
-    VALUES ('EcoVital',v_fe,'AI-Gen-3.2','{"style":"eco"}','2025-01-01 10:10:00');
-    SET v_be=LAST_INSERT_ID();
-    INSERT INTO Brands(brand_name,focus_id,ai_model_version,ai_generation_params,generated_at)
-    VALUES ('PuraDerma',v_fd,'AI-Gen-3.5','{"style":"clinical"}','2025-02-01 09:00:00');
-    SET v_bp=LAST_INSERT_ID();
-    INSERT INTO Brands(brand_name,focus_id,ai_model_version,ai_generation_params,generated_at)
-    VALUES ('HairElixir',v_fh,'AI-Gen-3.5','{"style":"luxury"}','2025-02-01 09:30:00');
-    SET v_bh=LAST_INSERT_ID();
+    -- Brands via UPSERT
+    CALL sp_upsert_brand('Vivanatura',v_fw,'AI-Gen-3.2','{"style":"organic"}','2025-01-01 10:00:00',v_bv);
+    CALL sp_upsert_brand('ZenAromatics',v_fa,'AI-Gen-3.2','{"style":"zen"}','2025-01-01 10:05:00',v_bz);
+    CALL sp_upsert_brand('EcoVital',v_fe,'AI-Gen-3.2','{"style":"eco"}','2025-01-01 10:10:00',v_be);
+    CALL sp_upsert_brand('PuraDerma',v_fd,'AI-Gen-3.5','{"style":"clinical"}','2025-02-01 09:00:00',v_bp);
+    CALL sp_upsert_brand('HairElixir',v_fh,'AI-Gen-3.5','{"style":"luxury"}','2025-02-01 09:30:00',v_bh);
 
     -- 9 sitios
-    INSERT INTO Websites(brand_id,country_id,site_url,marketing_focus,status_id,launch_date) VALUES
+    INSERT IGNORE INTO Websites(brand_id,country_id,site_url,marketing_focus,status_id,launch_date) VALUES
         (v_bv,v_col,'https://vivanatura.co','Bienestar integral',v_st_a,'2025-01-15'),
         (v_bz,v_col,'https://zenaromatics.co','Aromaterapia holística',v_st_a,'2025-01-20'),
         (v_bv,v_per,'https://vivanatura.pe','Vida natural',v_st_a,'2025-02-01'),
@@ -220,6 +568,7 @@ BEGIN
     DECLARE v_city_bog INT UNSIGNED; DECLARE v_city_lim INT UNSIGNED;
     DECLARE v_city_cdmx INT UNSIGNED; DECLARE v_city_scl INT UNSIGNED;
     DECLARE v_city_sj INT UNSIGNED;
+    DECLARE v_dummy INT UNSIGNED;
     DECLARE i INT DEFAULT 0;
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
@@ -250,23 +599,21 @@ BEGIN
         SET i=i+1;
     END WHILE;
 
-    -- Insertar clientes (30) con sus addresses
+    -- Insertar clientes (30) via UPSERT
     SET i=0;
     WHILE i < 6 DO
-        INSERT INTO Customers(first_name,last_name,email,phone,country_id) VALUES
-            (CONCAT('Carlos',i),'Ramirez',CONCAT('carlos',i,'@mail.com'),CONCAT('+57 300',i*1000+1234),v_col),
-            (CONCAT('Ana',i),'Flores',CONCAT('ana',i,'@mail.com'),CONCAT('+51 987',i*1000+6543),v_per),
-            (CONCAT('Diego',i),'Hernandez',CONCAT('diego',i,'@mail.com'),CONCAT('+52 55',i*1000+7890),v_mex),
-            (CONCAT('Valentina',i),'Silva',CONCAT('val',i,'@mail.com'),CONCAT('+56 9',i*1000+3456),v_chl),
-            (CONCAT('Jose',i),'Castro',CONCAT('jose',i,'@mail.com'),CONCAT('+506 ',i*1000+8901),v_cri);
+        CALL sp_upsert_customer(CONCAT('Carlos',i),'Ramirez',CONCAT('carlos',i,'@mail.com'),CONCAT('+57 300',i*1000+1234),v_col,v_dummy);
+        CALL sp_upsert_customer(CONCAT('Ana',i),'Flores',CONCAT('ana',i,'@mail.com'),CONCAT('+51 987',i*1000+6543),v_per,v_dummy);
+        CALL sp_upsert_customer(CONCAT('Diego',i),'Hernandez',CONCAT('diego',i,'@mail.com'),CONCAT('+52 55',i*1000+7890),v_mex,v_dummy);
+        CALL sp_upsert_customer(CONCAT('Valentina',i),'Silva',CONCAT('val',i,'@mail.com'),CONCAT('+56 9',i*1000+3456),v_chl,v_dummy);
+        CALL sp_upsert_customer(CONCAT('Jose',i),'Castro',CONCAT('jose',i,'@mail.com'),CONCAT('+506 ',i*1000+8901),v_cri,v_dummy);
         SET i=i+1;
     END WHILE;
 
     -- Vincular direcciones
     SET i=0;
     WHILE i < 30 DO
-        INSERT INTO Customer_addresses(customer_id,address_id,is_default)
-        VALUES(i+1, i+1, 1);
+        INSERT IGNORE INTO Customer_addresses(customer_id,address_id,is_default) VALUES(i+1, i+1, 1);
         SET i=i+1;
     END WHILE;
 
@@ -275,9 +622,7 @@ END //
 DELIMITER ;
 
 -- =============================================================
--- SP 6 — Catálogo de productos por marca (IDs hardcodeados)
--- Rango Postgres: Aceites 1-20, Cosmética 21-35, Capilar 36-50,
---   Bebidas 51-62, Alimentos 63-74, Jabones 75-88, Aromaterapia 89-100
+-- SP 6 — Catálogo de productos por marca
 -- =============================================================
 DROP PROCEDURE IF EXISTS sp_insert_product_catalog;
 DELIMITER //
@@ -363,7 +708,7 @@ END //
 DELIMITER ;
 
 -- =============================================================
--- SP 7 — Website_products + Precios (INSERT...SELECT)
+-- SP 7 — Website_products + Precios
 -- =============================================================
 DROP PROCEDURE IF EXISTS sp_insert_website_products;
 DELIMITER //
@@ -376,7 +721,6 @@ BEGIN
         RESIGNAL;
     END;
 
-    -- Publicar 6 productos por sitio
     INSERT IGNORE INTO Website_products(website_id,catalog_product_id,is_featured)
     SELECT w.website_id, pc.catalog_product_id, (pc.catalog_product_id % 3 = 0)
     FROM Websites w
@@ -384,10 +728,11 @@ BEGIN
     WHERE w.status_id IN (SELECT status_id FROM Order_statuses WHERE status_code IN ('CONFIRMED','PENDING'))
     GROUP BY w.website_id, pc.catalog_product_id
     HAVING COUNT(*) <= 8 OR pc.catalog_product_id <= (
-        SELECT MIN(c2.catalog_product_id) + 5 FROM Product_catalog c2 JOIN Brands b2 ON c2.brand_id=b2.brand_id JOIN Websites w2 ON b2.brand_id=w2.brand_id WHERE w2.website_id=w.website_id
+        SELECT MIN(c2.catalog_product_id) + 5 FROM Product_catalog c2
+        JOIN Brands b2 ON c2.brand_id=b2.brand_id JOIN Websites w2 ON b2.brand_id=w2.brand_id
+        WHERE w2.website_id=w.website_id
     );
 
-    -- Precios en moneda local (12-45 USD * tipo de cambio)
     INSERT IGNORE INTO Website_product_prices(website_product_id,sale_price,currency_id,valid_from)
     SELECT wp.website_product_id,
            ROUND((12 + (wp.catalog_product_id * 2.3)) * er.rate, 2),
@@ -403,7 +748,7 @@ END //
 DELIMITER ;
 
 -- =============================================================
--- SP 8 — Órdenes (generar 27+ órdenes en 5 países)
+-- SP 8 — Órdenes (27+ en 5 países)
 -- =============================================================
 DROP PROCEDURE IF EXISTS sp_insert_orders;
 DELIMITER //
@@ -472,7 +817,6 @@ BEGIN
     SELECT website_id INTO v_w8 FROM Websites WHERE site_url='https://ecovital.cl';
     SELECT website_id INTO v_w9 FROM Websites WHERE site_url='https://zenaromatics.cr';
 
-    -- Primeros clientes y direcciones por país
     SELECT customer_id INTO v_c1 FROM Customers WHERE country_id=v_col LIMIT 1;
     SELECT customer_id INTO v_c2 FROM Customers WHERE country_id=v_per LIMIT 1;
     SELECT customer_id INTO v_c3 FROM Customers WHERE country_id=v_mex LIMIT 1;
@@ -484,7 +828,7 @@ BEGIN
     SELECT customer_address_id INTO v_a4 FROM Customer_addresses WHERE customer_id=v_c4 LIMIT 1;
     SELECT customer_address_id INTO v_a5 FROM Customer_addresses WHERE customer_id=v_c5 LIMIT 1;
 
-    -- COLOMBIA: 8 órdenes (viv.co: 5, zen.co: 3)
+    -- COLOMBIA: 8 órdenes
     SET v_i=0;
     WHILE v_i < 5 DO
         SELECT wp.website_product_id, wpp.sale_price INTO v_wp, v_price
@@ -517,7 +861,7 @@ BEGIN
         SET v_i=v_i+1;
     END WHILE;
 
-    -- PERÚ: 6 órdenes (viv.pe: 3, eco.pe: 3)
+    -- PERÚ: 6 órdenes
     SELECT rate INTO v_rate FROM Exchange_rates WHERE currency_id=v_pen ORDER BY rate_date DESC LIMIT 1;
     SET v_i=0;
     WHILE v_i < 3 DO
@@ -551,7 +895,7 @@ BEGIN
         SET v_i=v_i+1;
     END WHILE;
 
-    -- MÉXICO: 5 órdenes (pura.mx: 3, hair.mx: 2)
+    -- MÉXICO: 5 órdenes
     SELECT rate INTO v_rate FROM Exchange_rates WHERE currency_id=v_mxn ORDER BY rate_date DESC LIMIT 1;
     SET v_i=0;
     WHILE v_i < 3 DO
@@ -585,7 +929,7 @@ BEGIN
         SET v_i=v_i+1;
     END WHILE;
 
-    -- CHILE: 4 órdenes (pura.cl: 2, eco.cl: 2)
+    -- CHILE: 4 órdenes
     SELECT rate INTO v_rate FROM Exchange_rates WHERE currency_id=v_clp ORDER BY rate_date DESC LIMIT 1;
     SET v_i=0;
     WHILE v_i < 2 DO
@@ -619,7 +963,7 @@ BEGIN
         SET v_i=v_i+1;
     END WHILE;
 
-    -- COSTA RICA: 4 órdenes (zen.cr)
+    -- COSTA RICA: 4 órdenes
     SELECT rate INTO v_rate FROM Exchange_rates WHERE currency_id=v_crc ORDER BY rate_date DESC LIMIT 1;
     SET v_i=0;
     WHILE v_i < 4 DO
@@ -730,12 +1074,10 @@ BEGIN
         RESIGNAL;
     END;
 
-    -- Entradas de stock
     INSERT INTO Inventory_movements(website_product_id,movement_type,quantity,reference_type,notes)
     SELECT website_product_id, 'IN', 500+(website_product_id*10), 'RESTOCK', 'Stock inicial'
     FROM Website_products;
 
-    -- Salidas por órdenes
     INSERT INTO Inventory_movements(website_product_id,movement_type,quantity,reference_type,notes)
     SELECT oi.website_product_id, 'OUT', 0 - CAST(oi.quantity AS SIGNED), 'ORDER', CONCAT('Orden #',oi.order_id)
     FROM Order_items oi;
@@ -745,7 +1087,7 @@ END //
 DELIMITER ;
 
 -- =============================================================
--- ORQUESTADOR
+-- ORQUESTADOR v4
 -- =============================================================
 DROP PROCEDURE IF EXISTS sp_load_all_data;
 DELIMITER //
@@ -758,7 +1100,7 @@ BEGIN
         RESIGNAL;
     END;
 
-    SELECT '=== Dynamic Brands: Iniciando carga ===' AS status;
+    SELECT '=== Dynamic Brands v4: Iniciando carga (UPSERT + INOUT) ===' AS status;
 
     CALL sp_insert_catalogs();
     CALL sp_insert_geography();
@@ -771,8 +1113,8 @@ BEGIN
     CALL sp_insert_shipping();
     CALL sp_insert_inventory_movements();
 
-    CALL sp_log('sp_load_all_data','Carga completa Dynamic Brands',NULL,NULL,'SUCCESS',NULL);
-    SELECT '=== Dynamic Brands: Carga completada ===' AS status;
+    CALL sp_log('sp_load_all_data','Carga completa Dynamic Brands v4',NULL,NULL,'SUCCESS',NULL);
+    SELECT '=== Dynamic Brands v4: Carga completada ===' AS status;
 END //
 DELIMITER ;
 

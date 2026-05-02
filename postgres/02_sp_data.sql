@@ -1,6 +1,7 @@
 -- =============================================================
---  ETHERIA GLOBAL — SPs + Datos v3
---  Con manejo de excepciones y SP de logging
+--  ETHERIA GLOBAL — SPs + Datos v4 (Refactor UPSERT + INOUT)
+--  Patrones avanzados: UPSERT granular, INOUT params,
+--  transacciones explícitas, manejo de excepciones.
 -- =============================================================
 \c etheria_global_db;
 
@@ -19,93 +20,384 @@ BEGIN
 END;$$;
 
 -- =============================================================
--- SP 1 — Catálogos base
+-- UPSERT: Currencies
+-- =============================================================
+CREATE OR REPLACE PROCEDURE sp_upsert_currency(
+    IN  p_code          CHAR(3),
+    IN  p_name          VARCHAR(80),
+    IN  p_symbol        VARCHAR(5),
+    IN  p_is_base       BOOLEAN,
+    INOUT p_currency_id INT
+) LANGUAGE plpgsql AS $$
+DECLARE v_existing INT;
+BEGIN
+    SELECT currency_id INTO v_existing FROM currencies WHERE currency_code = p_code;
+    IF v_existing IS NULL THEN
+        INSERT INTO currencies(currency_code,currency_name,currency_symbol,is_base)
+        VALUES(p_code,p_name,p_symbol,p_is_base) RETURNING currency_id INTO p_currency_id;
+        CALL sp_log('sp_upsert_currency','INSERT','currencies',p_currency_id,p_name,'SUCCESS',NULL);
+    ELSE
+        UPDATE currencies SET currency_name=p_name,currency_symbol=COALESCE(p_symbol,currency_symbol),is_base=p_is_base
+        WHERE currency_id=v_existing;
+        p_currency_id := v_existing;
+        CALL sp_log('sp_upsert_currency','UPDATE','currencies',p_currency_id,p_name,'SUCCESS',NULL);
+    END IF;
+EXCEPTION WHEN OTHERS THEN
+    CALL sp_log('sp_upsert_currency','ERROR','currencies',NULL,p_code||' '||SQLERRM,'ERROR',SQLERRM);
+    RAISE;
+END;$$;
+
+-- =============================================================
+-- UPSERT: Countries
+-- =============================================================
+CREATE OR REPLACE PROCEDURE sp_upsert_country(
+    IN  p_name          VARCHAR(100),
+    IN  p_iso           CHAR(3),
+    IN  p_region        VARCHAR(100),
+    IN  p_cur_id        INT,
+    INOUT p_country_id  INT
+) LANGUAGE plpgsql AS $$
+DECLARE v_existing INT;
+BEGIN
+    SELECT country_id INTO v_existing FROM countries WHERE iso_code = p_iso;
+    IF v_existing IS NULL THEN
+        INSERT INTO countries(country_name,iso_code,region,currency_id)
+        VALUES(p_name,p_iso,p_region,p_cur_id) RETURNING country_id INTO p_country_id;
+        CALL sp_log('sp_upsert_country','INSERT','countries',p_country_id,p_name,'SUCCESS',NULL);
+    ELSE
+        UPDATE countries SET country_name=p_name,region=p_region,currency_id=p_cur_id
+        WHERE country_id=v_existing;
+        p_country_id := v_existing;
+        CALL sp_log('sp_upsert_country','UPDATE','countries',p_country_id,p_name,'SUCCESS',NULL);
+    END IF;
+EXCEPTION WHEN OTHERS THEN
+    CALL sp_log('sp_upsert_country','ERROR','countries',NULL,p_iso||' '||SQLERRM,'ERROR',SQLERRM);
+    RAISE;
+END;$$;
+
+-- =============================================================
+-- UPSERT: States
+-- =============================================================
+CREATE OR REPLACE PROCEDURE sp_upsert_state(
+    IN  p_country_id    INT,
+    IN  p_name          VARCHAR(100),
+    IN  p_code          VARCHAR(10),
+    INOUT p_state_id    INT
+) LANGUAGE plpgsql AS $$
+DECLARE v_existing INT;
+BEGIN
+    SELECT state_id INTO v_existing FROM states WHERE country_id=p_country_id AND state_code=p_code;
+    IF v_existing IS NULL THEN
+        INSERT INTO states(country_id,state_name,state_code)
+        VALUES(p_country_id,p_name,p_code) RETURNING state_id INTO p_state_id;
+    ELSE
+        UPDATE states SET state_name=p_name WHERE state_id=v_existing;
+        p_state_id := v_existing;
+    END IF;
+END;$$;
+
+-- =============================================================
+-- UPSERT: Cities
+-- =============================================================
+CREATE OR REPLACE PROCEDURE sp_upsert_city(
+    IN  p_state_id      INT,
+    IN  p_name          VARCHAR(100),
+    INOUT p_city_id     INT
+) LANGUAGE plpgsql AS $$
+DECLARE v_existing INT;
+BEGIN
+    SELECT city_id INTO v_existing FROM cities WHERE state_id=p_state_id AND city_name=p_name;
+    IF v_existing IS NULL THEN
+        INSERT INTO cities(state_id,city_name) VALUES(p_state_id,p_name) RETURNING city_id INTO p_city_id;
+    ELSE
+        p_city_id := v_existing;
+    END IF;
+END;$$;
+
+-- =============================================================
+-- INSERT: Addresses (no upsert — se versionan)
+-- =============================================================
+CREATE OR REPLACE PROCEDURE sp_insert_address(
+    IN  p_line1         VARCHAR(200),
+    IN  p_city_id       INT,
+    IN  p_postal        VARCHAR(20) DEFAULT NULL,
+    INOUT p_address_id  INT
+) LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO addresses(address_line1,city_id,postal_code)
+    VALUES(p_line1,p_city_id,p_postal) RETURNING address_id INTO p_address_id;
+END;$$;
+
+-- =============================================================
+-- UPSERT: Categories
+-- =============================================================
+CREATE OR REPLACE PROCEDURE sp_upsert_category(
+    IN  p_name          VARCHAR(100),
+    IN  p_desc          VARCHAR(300),
+    INOUT p_category_id INT
+) LANGUAGE plpgsql AS $$
+DECLARE v_existing INT;
+BEGIN
+    SELECT category_id INTO v_existing FROM categories WHERE category_name=p_name;
+    IF v_existing IS NULL THEN
+        INSERT INTO categories(category_name,description) VALUES(p_name,p_desc) RETURNING category_id INTO p_category_id;
+    ELSE
+        UPDATE categories SET description=COALESCE(p_desc,description) WHERE category_id=v_existing;
+        p_category_id := v_existing;
+    END IF;
+END;$$;
+
+-- =============================================================
+-- UPSERT: MeasurementUnits
+-- =============================================================
+CREATE OR REPLACE PROCEDURE sp_upsert_unit(
+    IN  p_code          VARCHAR(10),
+    IN  p_name          VARCHAR(40),
+    IN  p_type          VARCHAR(20),
+    INOUT p_unit_id     INT
+) LANGUAGE plpgsql AS $$
+DECLARE v_existing INT;
+BEGIN
+    SELECT unit_id INTO v_existing FROM measurement_units WHERE unit_code=p_code;
+    IF v_existing IS NULL THEN
+        INSERT INTO measurement_units(unit_code,unit_name,unit_type) VALUES(p_code,p_name,p_type) RETURNING unit_id INTO p_unit_id;
+    ELSE
+        p_unit_id := v_existing;
+    END IF;
+END;$$;
+
+-- =============================================================
+-- UPSERT: Products
+-- =============================================================
+CREATE OR REPLACE PROCEDURE sp_upsert_product(
+    IN  p_name          VARCHAR(150),
+    IN  p_cat_id        INT,
+    IN  p_unit_id       INT,
+    IN  p_weight        DECIMAL(10,4),
+    IN  p_origin_id     INT,
+    INOUT p_product_id  INT
+) LANGUAGE plpgsql AS $$
+DECLARE v_existing INT;
+BEGIN
+    SELECT product_id INTO v_existing FROM products WHERE product_name=p_name;
+    IF v_existing IS NULL THEN
+        INSERT INTO products(product_name,category_id,unit_id,unit_weight_kg,origin_country_id)
+        VALUES(p_name,p_cat_id,p_unit_id,p_weight,p_origin_id) RETURNING product_id INTO p_product_id;
+    ELSE
+        p_product_id := v_existing;
+    END IF;
+END;$$;
+
+-- =============================================================
+-- UPSERT: Suppliers
+-- =============================================================
+CREATE OR REPLACE PROCEDURE sp_upsert_supplier(
+    IN  p_name          VARCHAR(150),
+    IN  p_country_id    INT,
+    IN  p_email         VARCHAR(150),
+    IN  p_phone         VARCHAR(30),
+    INOUT p_supplier_id INT
+) LANGUAGE plpgsql AS $$
+DECLARE v_existing INT;
+BEGIN
+    SELECT supplier_id INTO v_existing FROM suppliers WHERE supplier_name=p_name;
+    IF v_existing IS NULL THEN
+        INSERT INTO suppliers(supplier_name,country_id,contact_email,contact_phone)
+        VALUES(p_name,p_country_id,p_email,p_phone) RETURNING supplier_id INTO p_supplier_id;
+    ELSE
+        UPDATE suppliers SET country_id=p_country_id,contact_email=p_email,contact_phone=p_phone WHERE supplier_id=v_existing;
+        p_supplier_id := v_existing;
+    END IF;
+END;$$;
+
+-- =============================================================
+-- UPSERT: Exchange Rates
+-- =============================================================
+CREATE OR REPLACE PROCEDURE sp_upsert_exchange_rate(
+    IN  p_cur_id            INT,
+    IN  p_base_cur_id       INT,
+    IN  p_rate              DECIMAL(18,6),
+    IN  p_date              DATE,
+    IN  p_source            VARCHAR(100),
+    INOUT p_exchange_rate_id INT
+) LANGUAGE plpgsql AS $$
+DECLARE v_existing INT;
+BEGIN
+    SELECT exchange_rate_id INTO v_existing FROM exchange_rates WHERE currency_id=p_cur_id AND base_currency_id=p_base_cur_id AND rate_date=p_date;
+    IF v_existing IS NULL THEN
+        INSERT INTO exchange_rates(currency_id,base_currency_id,rate,rate_date,source)
+        VALUES(p_cur_id,p_base_cur_id,p_rate,p_date,p_source) RETURNING exchange_rate_id INTO p_exchange_rate_id;
+    ELSE
+        UPDATE exchange_rates SET rate=p_rate,source=p_source WHERE exchange_rate_id=v_existing;
+        p_exchange_rate_id := v_existing;
+    END IF;
+END;$$;
+
+-- =============================================================
+-- UPSERT: Import Statuses
+-- =============================================================
+CREATE OR REPLACE PROCEDURE sp_upsert_import_status(
+    IN  p_code          VARCHAR(30),
+    IN  p_desc          VARCHAR(150),
+    INOUT p_status_id   INT
+) LANGUAGE plpgsql AS $$
+DECLARE v_existing INT;
+BEGIN
+    SELECT status_id INTO v_existing FROM import_statuses WHERE status_code=p_code;
+    IF v_existing IS NULL THEN
+        INSERT INTO import_statuses(status_code,description) VALUES(p_code,p_desc) RETURNING status_id INTO p_status_id;
+    ELSE
+        p_status_id := v_existing;
+    END IF;
+END;$$;
+
+-- =============================================================
+-- UPSERT: Cost Types
+-- =============================================================
+CREATE OR REPLACE PROCEDURE sp_upsert_cost_type(
+    IN  p_code          VARCHAR(30),
+    IN  p_name          VARCHAR(100),
+    IN  p_applies       VARCHAR(30),
+    INOUT p_cost_type_id INT
+) LANGUAGE plpgsql AS $$
+DECLARE v_existing INT;
+BEGIN
+    SELECT cost_type_id INTO v_existing FROM cost_types WHERE cost_type_code=p_code;
+    IF v_existing IS NULL THEN
+        INSERT INTO cost_types(cost_type_code,cost_type_name,applies_to) VALUES(p_code,p_name,p_applies) RETURNING cost_type_id INTO p_cost_type_id;
+    ELSE
+        p_cost_type_id := v_existing;
+    END IF;
+END;$$;
+
+-- =============================================================
+-- UPSERT: Permit Types
+-- =============================================================
+CREATE OR REPLACE PROCEDURE sp_upsert_permit_type(
+    IN  p_code          VARCHAR(30),
+    IN  p_name          VARCHAR(100),
+    IN  p_authority     VARCHAR(150),
+    INOUT p_permit_type_id INT
+) LANGUAGE plpgsql AS $$
+DECLARE v_existing INT;
+BEGIN
+    SELECT permit_type_id INTO v_existing FROM permit_types WHERE permit_type_code=p_code;
+    IF v_existing IS NULL THEN
+        INSERT INTO permit_types(permit_type_code,permit_type_name,issuing_authority) VALUES(p_code,p_name,p_authority) RETURNING permit_type_id INTO p_permit_type_id;
+    ELSE
+        p_permit_type_id := v_existing;
+    END IF;
+END;$$;
+
+-- =============================================================
+-- UPSERT: Warehouse Types
+-- =============================================================
+CREATE OR REPLACE PROCEDURE sp_upsert_warehouse_type(
+    IN  p_code          VARCHAR(20),
+    IN  p_name          VARCHAR(60),
+    INOUT p_warehouse_type_id INT
+) LANGUAGE plpgsql AS $$
+DECLARE v_existing INT;
+BEGIN
+    SELECT warehouse_type_id INTO v_existing FROM warehouse_types WHERE type_code=p_code;
+    IF v_existing IS NULL THEN
+        INSERT INTO warehouse_types(type_code,type_name) VALUES(p_code,p_name) RETURNING warehouse_type_id INTO p_warehouse_type_id;
+    ELSE
+        p_warehouse_type_id := v_existing;
+    END IF;
+END;$$;
+
+-- =============================================================
+-- UPSERT: Warehouses
+-- =============================================================
+CREATE OR REPLACE PROCEDURE sp_upsert_warehouse(
+    IN  p_name          VARCHAR(100),
+    IN  p_addr_id       INT,
+    IN  p_type_id       INT,
+    IN  p_capacity      INT,
+    INOUT p_warehouse_id INT
+) LANGUAGE plpgsql AS $$
+DECLARE v_existing INT;
+BEGIN
+    SELECT warehouse_id INTO v_existing FROM warehouses WHERE warehouse_name=p_name;
+    IF v_existing IS NULL THEN
+        INSERT INTO warehouses(warehouse_name,address_id,warehouse_type_id,capacity_units)
+        VALUES(p_name,p_addr_id,p_type_id,p_capacity) RETURNING warehouse_id INTO p_warehouse_id;
+    ELSE
+        UPDATE warehouses SET address_id=p_addr_id,warehouse_type_id=p_type_id,capacity_units=p_capacity WHERE warehouse_id=v_existing;
+        p_warehouse_id := v_existing;
+    END IF;
+END;$$;
+
+-- =============================================================
+-- SP 1 — Catálogos base (orquestador de UPSERTs)
 -- =============================================================
 CREATE OR REPLACE PROCEDURE sp_insert_catalogs()
 LANGUAGE plpgsql AS $$
-DECLARE v_err TEXT;
+DECLARE
+    v_err TEXT;
+    v_dummy INT;
 BEGIN
     -- Currencies
-    INSERT INTO currencies(currency_code,currency_name,currency_symbol,is_base)
-    VALUES
-        ('USD','US Dollar','$',TRUE),
-        ('COP','Peso Colombiano','$',FALSE),
-        ('PEN','Sol Peruano','S/',FALSE),
-        ('MXN','Peso Mexicano','$',FALSE),
-        ('CLP','Peso Chileno','$',FALSE),
-        ('CRC','Colón Costarricense','₡',FALSE)
-    ON CONFLICT(currency_code) DO NOTHING;
+    CALL sp_upsert_currency('USD','US Dollar','$',TRUE,v_dummy);
+    CALL sp_upsert_currency('COP','Peso Colombiano','$',FALSE,v_dummy);
+    CALL sp_upsert_currency('PEN','Sol Peruano','S/',FALSE,v_dummy);
+    CALL sp_upsert_currency('MXN','Peso Mexicano','$',FALSE,v_dummy);
+    CALL sp_upsert_currency('CLP','Peso Chileno','$',FALSE,v_dummy);
+    CALL sp_upsert_currency('CRC','Colón Costarricense','₡',FALSE,v_dummy);
 
     -- Categories
-    INSERT INTO categories(category_name,description)
-    VALUES
-        ('Aceites Esenciales','Aceites naturales para aromaterapia y uso tópico'),
-        ('Cosmética Dermatológica','Productos para el cuidado de la piel'),
-        ('Capilar','Productos para el cuidado del cabello'),
-        ('Bebidas Naturales','Bebidas funcionales y saludables'),
-        ('Alimentos Funcionales','Alimentos con propiedades medicinales'),
-        ('Jabones Artesanales','Jabones naturales y orgánicos'),
-        ('Aromaterapia','Difusores y mezclas aromáticas')
-    ON CONFLICT(category_name) DO NOTHING;
+    CALL sp_upsert_category('Aceites Esenciales','Aceites naturales para aromaterapia y uso tópico',v_dummy);
+    CALL sp_upsert_category('Cosmética Dermatológica','Productos para el cuidado de la piel',v_dummy);
+    CALL sp_upsert_category('Capilar','Productos para el cuidado del cabello',v_dummy);
+    CALL sp_upsert_category('Bebidas Naturales','Bebidas funcionales y saludables',v_dummy);
+    CALL sp_upsert_category('Alimentos Funcionales','Alimentos con propiedades medicinales',v_dummy);
+    CALL sp_upsert_category('Jabones Artesanales','Jabones naturales y orgánicos',v_dummy);
+    CALL sp_upsert_category('Aromaterapia','Difusores y mezclas aromáticas',v_dummy);
 
     -- MeasurementUnits
-    INSERT INTO measurement_units(unit_code,unit_name,unit_type)
-    VALUES
-        ('KG','Kilogramo','WEIGHT'),
-        ('G','Gramo','WEIGHT'),
-        ('L','Litro','VOLUME'),
-        ('ML','Mililitro','VOLUME'),
-        ('UN','Unidad','UNIT')
-    ON CONFLICT(unit_code) DO NOTHING;
+    CALL sp_upsert_unit('KG','Kilogramo','WEIGHT',v_dummy);
+    CALL sp_upsert_unit('G','Gramo','WEIGHT',v_dummy);
+    CALL sp_upsert_unit('L','Litro','VOLUME',v_dummy);
+    CALL sp_upsert_unit('ML','Mililitro','VOLUME',v_dummy);
+    CALL sp_upsert_unit('UN','Unidad','UNIT',v_dummy);
 
     -- CostTypes
-    INSERT INTO cost_types(cost_type_code,cost_type_name,applies_to)
-    VALUES
-        ('FLETE','Flete Marítimo','LOGISTIC'),
-        ('SEGURO','Seguro de Carga','LOGISTIC'),
-        ('PUERTO','Manejo Portuario','LOGISTIC'),
-        ('ARANCEL_GEN','Arancel General de Importación','TARIFF'),
-        ('IVA_IMPORT','IVA en Importación','TARIFF'),
-        ('PERMISO_SAN','Permiso Sanitario','PERMIT'),
-        ('PERMISO_COSM','Registro Cosmético','PERMIT'),
-        ('COURIER','Envío Courier al Cliente','SHIPPING'),
-        ('ALMACEN','Almacenamiento HUB','OTHER')
-    ON CONFLICT(cost_type_code) DO NOTHING;
+    CALL sp_upsert_cost_type('FLETE','Flete Marítimo','LOGISTIC',v_dummy);
+    CALL sp_upsert_cost_type('SEGURO','Seguro de Carga','LOGISTIC',v_dummy);
+    CALL sp_upsert_cost_type('PUERTO','Manejo Portuario','LOGISTIC',v_dummy);
+    CALL sp_upsert_cost_type('ARANCEL_GEN','Arancel General de Importación','TARIFF',v_dummy);
+    CALL sp_upsert_cost_type('IVA_IMPORT','IVA en Importación','TARIFF',v_dummy);
+    CALL sp_upsert_cost_type('PERMISO_SAN','Permiso Sanitario','PERMIT',v_dummy);
+    CALL sp_upsert_cost_type('PERMISO_COSM','Registro Cosmético','PERMIT',v_dummy);
+    CALL sp_upsert_cost_type('COURIER','Envío Courier al Cliente','SHIPPING',v_dummy);
+    CALL sp_upsert_cost_type('ALMACEN','Almacenamiento HUB','OTHER',v_dummy);
 
     -- PermitTypes
-    INSERT INTO permit_types(permit_type_code,permit_type_name,issuing_authority)
-    VALUES
-        ('INVIMA','Registro INVIMA Colombia','INVIMA Colombia'),
-        ('DIGEMID','Registro DIGEMID Perú','DIGEMID Perú'),
-        ('COFEPRIS','Registro COFEPRIS México','COFEPRIS México'),
-        ('ISP','Registro ISP Chile','ISP Chile'),
-        ('MINSA_CRI','Registro MINSA Costa Rica','MINSA Costa Rica')
-    ON CONFLICT(permit_type_code) DO NOTHING;
+    CALL sp_upsert_permit_type('INVIMA','Registro INVIMA Colombia','INVIMA Colombia',v_dummy);
+    CALL sp_upsert_permit_type('DIGEMID','Registro DIGEMID Perú','DIGEMID Perú',v_dummy);
+    CALL sp_upsert_permit_type('COFEPRIS','Registro COFEPRIS México','COFEPRIS México',v_dummy);
+    CALL sp_upsert_permit_type('ISP','Registro ISP Chile','ISP Chile',v_dummy);
+    CALL sp_upsert_permit_type('MINSA_CRI','Registro MINSA Costa Rica','MINSA Costa Rica',v_dummy);
 
     -- ImportStatuses
-    INSERT INTO import_statuses(status_code,description)
-    VALUES
-        ('PENDING','Pendiente de envío'),
-        ('SHIPPED','En tránsito'),
-        ('RECEIVED','Recibido en HUB'),
-        ('DISPATCHED','Despachado al país destino'),
-        ('CANCELLED','Cancelado'),
-        ('ACTIVE','Activo'),
-        ('EXPIRED','Expirado'),
-        ('REJECTED','Rechazado')
-    ON CONFLICT(status_code) DO NOTHING;
+    CALL sp_upsert_import_status('PENDING','Pendiente de envío',v_dummy);
+    CALL sp_upsert_import_status('SHIPPED','En tránsito',v_dummy);
+    CALL sp_upsert_import_status('RECEIVED','Recibido en HUB',v_dummy);
+    CALL sp_upsert_import_status('DISPATCHED','Despachado al país destino',v_dummy);
+    CALL sp_upsert_import_status('CANCELLED','Cancelado',v_dummy);
+    CALL sp_upsert_import_status('ACTIVE','Activo',v_dummy);
+    CALL sp_upsert_import_status('EXPIRED','Expirado',v_dummy);
+    CALL sp_upsert_import_status('REJECTED','Rechazado',v_dummy);
 
     -- WarehouseTypes
-    INSERT INTO warehouse_types(type_code,type_name)
-    VALUES
-        ('RECEIVING','Recepción de Mercancía'),
-        ('LABELING','Etiquetado de Marca'),
-        ('DISPATCH','Despacho a País Destino'),
-        ('MIXED','Multipropósito')
-    ON CONFLICT(type_code) DO NOTHING;
+    CALL sp_upsert_warehouse_type('RECEIVING','Recepción de Mercancía',v_dummy);
+    CALL sp_upsert_warehouse_type('LABELING','Etiquetado de Marca',v_dummy);
+    CALL sp_upsert_warehouse_type('DISPATCH','Despacho a País Destino',v_dummy);
+    CALL sp_upsert_warehouse_type('MIXED','Multipropósito',v_dummy);
 
     CALL sp_log('sp_insert_catalogs','Catálogos base insertados exitosamente','categories',NULL,'SUCCESS',NULL);
-    
+
 EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
     CALL sp_log('sp_insert_catalogs','Error en inserción de catálogos',NULL,NULL,'ERROR',v_err);
@@ -113,18 +405,19 @@ EXCEPTION WHEN OTHERS THEN
 END;$$;
 
 -- =============================================================
--- SP 2 — Países, estados, ciudades, direcciones
+-- SP 2 — Geografía (con UPSERT chaining)
 -- =============================================================
 CREATE OR REPLACE PROCEDURE sp_insert_geography()
 LANGUAGE plpgsql AS $$
 DECLARE
-    v_cid_col INT; v_cid_per INT; v_cid_mex INT;
-    v_cid_chl INT; v_cid_cri INT; v_cid_nic INT;
     v_cur_usd INT; v_cur_cop INT; v_cur_pen INT;
     v_cur_mxn INT; v_cur_clp INT; v_cur_crc INT;
+    v_cid_col INT; v_cid_per INT; v_cid_mex INT;
+    v_cid_chl INT; v_cid_cri INT; v_cid_nic INT;
     v_st INT; v_city INT; v_addr INT;
     v_err TEXT;
 BEGIN
+    -- Get currency IDs
     SELECT currency_id INTO v_cur_usd FROM currencies WHERE currency_code='USD';
     SELECT currency_id INTO v_cur_cop FROM currencies WHERE currency_code='COP';
     SELECT currency_id INTO v_cur_pen FROM currencies WHERE currency_code='PEN';
@@ -132,52 +425,44 @@ BEGIN
     SELECT currency_id INTO v_cur_clp FROM currencies WHERE currency_code='CLP';
     SELECT currency_id INTO v_cur_crc FROM currencies WHERE currency_code='CRC';
 
-    -- Países
-    INSERT INTO countries(country_name,iso_code,region,currency_id)
-    VALUES
-        ('Colombia','COL','Latinoamérica',v_cur_cop),
-        ('Perú','PER','Latinoamérica',v_cur_pen),
-        ('México','MEX','Latinoamérica',v_cur_mxn),
-        ('Chile','CHL','Latinoamérica',v_cur_clp),
-        ('Costa Rica','CRI','Centroamérica',v_cur_crc),
-        ('Nicaragua','NIC','Centroamérica',v_cur_usd)   -- HUB logístico
-    ON CONFLICT(iso_code) DO NOTHING;
+    -- Countries via UPSERT
+    CALL sp_upsert_country('Colombia','COL','Latinoamérica',v_cur_cop,v_cid_col);
+    CALL sp_upsert_country('Perú','PER','Latinoamérica',v_cur_pen,v_cid_per);
+    CALL sp_upsert_country('México','MEX','Latinoamérica',v_cur_mxn,v_cid_mex);
+    CALL sp_upsert_country('Chile','CHL','Latinoamérica',v_cur_clp,v_cid_chl);
+    CALL sp_upsert_country('Costa Rica','CRI','Centroamérica',v_cur_crc,v_cid_cri);
+    CALL sp_upsert_country('Nicaragua','NIC','Centroamérica',v_cur_usd,v_cid_nic);
 
-    SELECT country_id INTO v_cid_col FROM countries WHERE iso_code='COL';
-    SELECT country_id INTO v_cid_per FROM countries WHERE iso_code='PER';
-    SELECT country_id INTO v_cid_mex FROM countries WHERE iso_code='MEX';
-    SELECT country_id INTO v_cid_chl FROM countries WHERE iso_code='CHL';
-    SELECT country_id INTO v_cid_cri FROM countries WHERE iso_code='CRI';
-    SELECT country_id INTO v_cid_nic FROM countries WHERE iso_code='NIC';
+    -- States
+    CALL sp_upsert_state(v_cid_col,'Cundinamarca','CUN',v_st);
+    CALL sp_upsert_state(v_cid_col,'Antioquia','ANT',v_st);
+    CALL sp_upsert_state(v_cid_per,'Lima','LIM',v_st);
+    CALL sp_upsert_state(v_cid_per,'Arequipa','AQP',v_st);
+    CALL sp_upsert_state(v_cid_mex,'Ciudad de México','CDMX',v_st);
+    CALL sp_upsert_state(v_cid_mex,'Jalisco','JAL',v_st);
+    CALL sp_upsert_state(v_cid_chl,'Región Metropolitana','RM',v_st);
+    CALL sp_upsert_state(v_cid_chl,'Valparaíso','VAL',v_st);
+    CALL sp_upsert_state(v_cid_cri,'San José','SJ',v_st);
+    CALL sp_upsert_state(v_cid_cri,'Alajuela','AL',v_st);
+    CALL sp_upsert_state(v_cid_nic,'Managua','MAN',v_st);
+    CALL sp_upsert_state(v_cid_nic,'Región Autónoma Caribe Sur','RACS',v_st);
 
-    -- Estados/Provincias principales
-    INSERT INTO states(country_id,state_name,state_code) VALUES
-        (v_cid_col,'Cundinamarca','CUN'),(v_cid_col,'Antioquia','ANT'),
-        (v_cid_per,'Lima','LIM'),(v_cid_per,'Arequipa','AQP'),
-        (v_cid_mex,'Ciudad de México','CDMX'),(v_cid_mex,'Jalisco','JAL'),
-        (v_cid_chl,'Región Metropolitana','RM'),(v_cid_chl,'Valparaíso','VAL'),
-        (v_cid_cri,'San José','SJ'),(v_cid_cri,'Alajuela','AL'),
-        (v_cid_nic,'Managua','MAN'),(v_cid_nic,'Región Autónoma Caribe Sur','RACS');
-
-    -- Ciudades
+    -- Cities
     SELECT state_id INTO v_st FROM states WHERE state_code='CUN';
-    INSERT INTO cities(state_id,city_name) VALUES(v_st,'Bogotá');
+    CALL sp_upsert_city(v_st,'Bogotá',v_city);
     SELECT state_id INTO v_st FROM states WHERE state_code='LIM';
-    INSERT INTO cities(state_id,city_name) VALUES(v_st,'Lima');
+    CALL sp_upsert_city(v_st,'Lima',v_city);
     SELECT state_id INTO v_st FROM states WHERE state_code='CDMX';
-    INSERT INTO cities(state_id,city_name) VALUES(v_st,'Ciudad de México');
+    CALL sp_upsert_city(v_st,'Ciudad de México',v_city);
     SELECT state_id INTO v_st FROM states WHERE state_code='RM';
-    INSERT INTO cities(state_id,city_name) VALUES(v_st,'Santiago');
+    CALL sp_upsert_city(v_st,'Santiago',v_city);
     SELECT state_id INTO v_st FROM states WHERE state_code='SJ';
-    INSERT INTO cities(state_id,city_name) VALUES(v_st,'San José');
+    CALL sp_upsert_city(v_st,'San José',v_city);
     SELECT state_id INTO v_st FROM states WHERE state_code='RACS';
-    INSERT INTO cities(state_id,city_name) VALUES(v_st,'Bluefields');  -- HUB
+    CALL sp_upsert_city(v_st,'Bluefields',v_city);
 
     -- Dirección del HUB Nicaragua
-    SELECT city_id INTO v_city FROM cities WHERE city_name='Bluefields';
-    INSERT INTO addresses(address_line1,city_id)
-    VALUES('Puerto de Bluefields, Zona Franca Caribe Sur',v_city)
-    RETURNING address_id INTO v_addr;
+    CALL sp_insert_address('Puerto de Bluefields, Zona Franca Caribe Sur',v_city,NULL,v_addr);
 
     CALL sp_log('sp_insert_geography','Geografía insertada: 6 países','countries',NULL,'SUCCESS',NULL);
 EXCEPTION WHEN OTHERS THEN
@@ -193,6 +478,7 @@ CREATE OR REPLACE PROCEDURE sp_insert_exchange_rates()
 LANGUAGE plpgsql AS $$
 DECLARE
     v_usd INT; v_cop INT; v_pen INT; v_mxn INT; v_clp INT; v_crc INT;
+    v_dummy INT;
     v_err TEXT;
 BEGIN
     SELECT currency_id INTO v_usd FROM currencies WHERE currency_code='USD';
@@ -202,19 +488,20 @@ BEGIN
     SELECT currency_id INTO v_clp FROM currencies WHERE currency_code='CLP';
     SELECT currency_id INTO v_crc FROM currencies WHERE currency_code='CRC';
 
-    -- rate = cuántas unidades de moneda local compra 1 USD
-    INSERT INTO exchange_rates(currency_id,base_currency_id,rate,rate_date,source) VALUES
-        (v_cop,v_usd,4150.00,'2025-01-01','Banco de la República'),
-        (v_pen,v_usd,3.72,  '2025-01-01','BCRP'),
-        (v_mxn,v_usd,17.15, '2025-01-01','Banxico'),
-        (v_clp,v_usd,920.00,'2025-01-01','Banco Central de Chile'),
-        (v_crc,v_usd,515.00,'2025-01-01','BCCR'),
-        (v_cop,v_usd,4200.00,'2025-06-01','Banco de la República'),
-        (v_pen,v_usd,3.75,  '2025-06-01','BCRP'),
-        (v_mxn,v_usd,17.50, '2025-06-01','Banxico'),
-        (v_clp,v_usd,940.00,'2025-06-01','Banco Central de Chile'),
-        (v_crc,v_usd,520.00,'2025-06-01','BCCR')
-    ON CONFLICT(currency_id,base_currency_id,rate_date) DO NOTHING;
+    -- USD→USD self-reference (needed for imports priced in base currency)
+    CALL sp_upsert_exchange_rate(v_usd,v_usd,1.000000,'2025-01-01','Sistema',v_dummy);
+    CALL sp_upsert_exchange_rate(v_usd,v_usd,1.000000,'2025-06-01','Sistema',v_dummy);
+
+    CALL sp_upsert_exchange_rate(v_cop,v_usd,4150.000000,'2025-01-01','Banco de la República',v_dummy);
+    CALL sp_upsert_exchange_rate(v_pen,v_usd,3.720000,'2025-01-01','BCRP',v_dummy);
+    CALL sp_upsert_exchange_rate(v_mxn,v_usd,17.150000,'2025-01-01','Banxico',v_dummy);
+    CALL sp_upsert_exchange_rate(v_clp,v_usd,920.000000,'2025-01-01','Banco Central de Chile',v_dummy);
+    CALL sp_upsert_exchange_rate(v_crc,v_usd,515.000000,'2025-01-01','BCCR',v_dummy);
+    CALL sp_upsert_exchange_rate(v_cop,v_usd,4200.000000,'2025-06-01','Banco de la República',v_dummy);
+    CALL sp_upsert_exchange_rate(v_pen,v_usd,3.750000,'2025-06-01','BCRP',v_dummy);
+    CALL sp_upsert_exchange_rate(v_mxn,v_usd,17.500000,'2025-06-01','Banxico',v_dummy);
+    CALL sp_upsert_exchange_rate(v_clp,v_usd,940.000000,'2025-06-01','Banco Central de Chile',v_dummy);
+    CALL sp_upsert_exchange_rate(v_crc,v_usd,520.000000,'2025-06-01','BCCR',v_dummy);
 
     CALL sp_log('sp_insert_exchange_rates','Tipos de cambio insertados','exchange_rates',NULL,'SUCCESS',NULL);
 EXCEPTION WHEN OTHERS THEN
@@ -230,45 +517,35 @@ CREATE OR REPLACE PROCEDURE sp_insert_suppliers_warehouses()
 LANGUAGE plpgsql AS $$
 DECLARE
     v_cid_ind INT; v_cid_fra INT; v_cid_bra INT; v_cid_nic INT;
-    v_cur_usd INT; v_wt INT; v_addr INT; v_city INT; v_st INT;
+    v_cur_usd INT; v_wt INT; v_addr INT; v_city INT; v_wh INT;
+    v_sup INT;
     v_err TEXT;
 BEGIN
     SELECT currency_id INTO v_cur_usd FROM currencies WHERE currency_code='USD';
 
-    -- Países de origen de proveedores
-    INSERT INTO countries(country_name,iso_code,region,currency_id)
-    VALUES
-        ('India','IND','Asia',v_cur_usd),
-        ('Francia','FRA','Europa',v_cur_usd),
-        ('Brasil','BRA','Latinoamérica',v_cur_usd)
-    ON CONFLICT(iso_code) DO NOTHING;
-
-    SELECT country_id INTO v_cid_ind FROM countries WHERE iso_code='IND';
-    SELECT country_id INTO v_cid_fra FROM countries WHERE iso_code='FRA';
-    SELECT country_id INTO v_cid_bra FROM countries WHERE iso_code='BRA';
+    -- Países de origen (pueden no existir en geography SP)
+    CALL sp_upsert_country('India','IND','Asia',v_cur_usd,v_cid_ind);
+    CALL sp_upsert_country('Francia','FRA','Europa',v_cur_usd,v_cid_fra);
+    CALL sp_upsert_country('Brasil','BRA','Latinoamérica',v_cur_usd,v_cid_bra);
     SELECT country_id INTO v_cid_nic FROM countries WHERE iso_code='NIC';
 
-    -- Proveedores
-    INSERT INTO suppliers(supplier_name,country_id,contact_email,contact_phone) VALUES
-        ('Himalaya Naturals Ltd',     v_cid_ind,'procurement@himalaya-naturals.com','+91-22-12345678'),
-        ('Provence Arômes SARL',      v_cid_fra,'contact@provence-aromes.fr','+33-4-90123456'),
-        ('AmazonBio Exportações Ltda',v_cid_bra,'export@amazonbio.com.br','+55-92-98765432'),
-        ('Pacific Wellness Co.',      v_cid_ind,'sales@pacificwellness.in','+91-80-87654321'),
-        ('Andean Roots S.A.',         v_cid_bra,'info@andeanroots.com','+55-11-11223344');
+    -- Proveedores via UPSERT
+    CALL sp_upsert_supplier('Himalaya Naturals Ltd',v_cid_ind,'procurement@himalaya-naturals.com','+91-22-12345678',v_sup);
+    CALL sp_upsert_supplier('Provence Arômes SARL',v_cid_fra,'contact@provence-aromes.fr','+33-4-90123456',v_sup);
+    CALL sp_upsert_supplier('AmazonBio Exportações Ltda',v_cid_bra,'export@amazonbio.com.br','+55-92-98765432',v_sup);
+    CALL sp_upsert_supplier('Pacific Wellness Co.',v_cid_ind,'sales@pacificwellness.in','+91-80-87654321',v_sup);
+    CALL sp_upsert_supplier('Andean Roots S.A.',v_cid_bra,'info@andeanroots.com','+55-11-11223344',v_sup);
 
     -- Almacenes HUB Nicaragua
-    SELECT warehouse_type_id INTO v_wt FROM warehouse_types WHERE type_code='RECEIVING';
     SELECT city_id INTO v_city FROM cities WHERE city_name='Bluefields';
     SELECT address_id INTO v_addr FROM addresses WHERE city_id=v_city LIMIT 1;
 
-    INSERT INTO warehouses(warehouse_name,address_id,warehouse_type_id,capacity_units) VALUES
-        ('HUB-A Recepción Caribe',v_addr,v_wt,5000);
+    SELECT warehouse_type_id INTO v_wt FROM warehouse_types WHERE type_code='RECEIVING';
+    CALL sp_upsert_warehouse('HUB-A Recepción Caribe',v_addr,v_wt,5000,v_wh);
     SELECT warehouse_type_id INTO v_wt FROM warehouse_types WHERE type_code='LABELING';
-    INSERT INTO warehouses(warehouse_name,address_id,warehouse_type_id,capacity_units) VALUES
-        ('HUB-B Etiquetado y Marcas',v_addr,v_wt,3000);
+    CALL sp_upsert_warehouse('HUB-B Etiquetado y Marcas',v_addr,v_wt,3000,v_wh);
     SELECT warehouse_type_id INTO v_wt FROM warehouse_types WHERE type_code='DISPATCH';
-    INSERT INTO warehouses(warehouse_name,address_id,warehouse_type_id,capacity_units) VALUES
-        ('HUB-C Despacho Internacional',v_addr,v_wt,4000);
+    CALL sp_upsert_warehouse('HUB-C Despacho Internacional',v_addr,v_wt,4000,v_wh);
 
     CALL sp_log('sp_insert_suppliers_warehouses','5 proveedores y 3 almacenes insertados',NULL,NULL,'SUCCESS',NULL);
 EXCEPTION WHEN OTHERS THEN
@@ -286,8 +563,8 @@ DECLARE
     v_cat_ace INT; v_cat_cos INT; v_cat_cap INT; v_cat_beb INT;
     v_cat_ali INT; v_cat_jab INT; v_cat_aro INT;
     v_unit_l INT; v_unit_ml INT; v_unit_kg INT; v_unit_g INT; v_unit_un INT;
-    v_cid_ind INT; v_cid_bra INT; v_cid_fra;
-    v_err TEXT;
+    v_cid_ind INT; v_cid_bra INT; v_cid_fra INT;
+    v_prod INT; v_err TEXT;
 BEGIN
     SELECT category_id INTO v_cat_ace FROM categories WHERE category_name='Aceites Esenciales';
     SELECT category_id INTO v_cat_cos FROM categories WHERE category_name='Cosmética Dermatológica';
@@ -305,125 +582,118 @@ BEGIN
     SELECT country_id INTO v_cid_bra FROM countries WHERE iso_code='BRA';
     SELECT country_id INTO v_cid_fra FROM countries WHERE iso_code='FRA';
 
-    -- Aceites Esenciales (20 productos)
-    INSERT INTO products(product_name,category_id,unit_id,unit_weight_kg,origin_country_id) VALUES
-        ('Aceite Esencial de Lavanda 30ml',v_cat_ace,v_unit_ml,0.05,v_cid_fra),
-        ('Aceite Esencial de Árbol de Té 30ml',v_cat_ace,v_unit_ml,0.05,v_cid_ind),
-        ('Aceite Esencial de Eucalipto 50ml',v_cat_ace,v_unit_ml,0.08,v_cid_ind),
-        ('Aceite Esencial de Rosa Mosqueta 30ml',v_cat_ace,v_unit_ml,0.05,v_cid_bra),
-        ('Aceite Esencial de Menta 30ml',v_cat_ace,v_unit_ml,0.05,v_cid_ind),
-        ('Aceite de Coco Virgen 500ml',v_cat_ace,v_unit_ml,0.55,v_cid_ind),
-        ('Aceite de Argán Puro 100ml',v_cat_ace,v_unit_ml,0.12,v_cid_ind),
-        ('Aceite de Jojoba 100ml',v_cat_ace,v_unit_ml,0.12,v_cid_ind),
-        ('Aceite de Almendras Dulces 250ml',v_cat_ace,v_unit_ml,0.27,v_cid_ind),
-        ('Aceite Esencial de Bergamota 15ml',v_cat_ace,v_unit_ml,0.03,v_cid_fra),
-        ('Aceite Esencial de Ylang Ylang 15ml',v_cat_ace,v_unit_ml,0.03,v_cid_ind),
-        ('Aceite Esencial de Limón 30ml',v_cat_ace,v_unit_ml,0.05,v_cid_bra),
-        ('Aceite Esencial de Naranja Dulce 30ml',v_cat_ace,v_unit_ml,0.05,v_cid_bra),
-        ('Aceite de Hemp Cáñamo 100ml',v_cat_ace,v_unit_ml,0.12,v_cid_ind),
-        ('Aceite Esencial de Incienso 15ml',v_cat_ace,v_unit_ml,0.03,v_cid_ind),
-        ('Aceite Esencial de Romero 30ml',v_cat_ace,v_unit_ml,0.05,v_cid_fra),
-        ('Aceite Esencial de Geranio 30ml',v_cat_ace,v_unit_ml,0.05,v_cid_fra),
-        ('Aceite de Macadamia 200ml',v_cat_ace,v_unit_ml,0.22,v_cid_bra),
-        ('Aceite de Semilla de Uva 250ml',v_cat_ace,v_unit_ml,0.27,v_cid_fra);
+    -- Aceites Esenciales (19 productos)
+    CALL sp_upsert_product('Aceite Esencial de Lavanda 30ml',v_cat_ace,v_unit_ml,0.05,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Aceite Esencial de Árbol de Té 30ml',v_cat_ace,v_unit_ml,0.05,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Aceite Esencial de Eucalipto 50ml',v_cat_ace,v_unit_ml,0.08,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Aceite Esencial de Rosa Mosqueta 30ml',v_cat_ace,v_unit_ml,0.05,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Aceite Esencial de Menta 30ml',v_cat_ace,v_unit_ml,0.05,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Aceite de Coco Virgen 500ml',v_cat_ace,v_unit_ml,0.55,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Aceite de Argán Puro 100ml',v_cat_ace,v_unit_ml,0.12,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Aceite de Jojoba 100ml',v_cat_ace,v_unit_ml,0.12,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Aceite de Almendras Dulces 250ml',v_cat_ace,v_unit_ml,0.27,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Aceite Esencial de Bergamota 15ml',v_cat_ace,v_unit_ml,0.03,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Aceite Esencial de Ylang Ylang 15ml',v_cat_ace,v_unit_ml,0.03,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Aceite Esencial de Limón 30ml',v_cat_ace,v_unit_ml,0.05,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Aceite Esencial de Naranja Dulce 30ml',v_cat_ace,v_unit_ml,0.05,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Aceite de Hemp Cáñamo 100ml',v_cat_ace,v_unit_ml,0.12,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Aceite Esencial de Incienso 15ml',v_cat_ace,v_unit_ml,0.03,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Aceite Esencial de Romero 30ml',v_cat_ace,v_unit_ml,0.05,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Aceite Esencial de Geranio 30ml',v_cat_ace,v_unit_ml,0.05,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Aceite de Macadamia 200ml',v_cat_ace,v_unit_ml,0.22,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Aceite de Semilla de Uva 250ml',v_cat_ace,v_unit_ml,0.27,v_cid_fra,v_prod);
 
     -- Cosmética Dermatológica (15 productos)
-    INSERT INTO products(product_name,category_id,unit_id,unit_weight_kg,origin_country_id) VALUES
-        ('Sérum Vitamina C 30ml',v_cat_cos,v_unit_ml,0.08,v_cid_ind),
-        ('Crema Hidratante Aloe Vera 150ml',v_cat_cos,v_unit_ml,0.18,v_cid_ind),
-        ('Mascarilla de Arcilla Verde 200g',v_cat_cos,v_unit_g,0.22,v_cid_fra),
-        ('Contorno de Ojos Retinol 20ml',v_cat_cos,v_unit_ml,0.05,v_cid_fra),
-        ('Exfoliante de Café 300g',v_cat_cos,v_unit_g,0.33,v_cid_bra),
-        ('Tónico Facial de Agua de Rosas 200ml',v_cat_cos,v_unit_ml,0.22,v_cid_fra),
-        ('Crema Antienvejecimiento Q10 50ml',v_cat_cos,v_unit_ml,0.08,v_cid_ind),
-        ('Protector Solar Natural SPF50 100ml',v_cat_cos,v_unit_ml,0.12,v_cid_ind),
-        ('Mascarilla de Carbón Activado 150ml',v_cat_cos,v_unit_ml,0.17,v_cid_ind),
-        ('Sérum Hialurónico 30ml',v_cat_cos,v_unit_ml,0.05,v_cid_fra),
-        ('Bálsamo de Cúrcuma 80g',v_cat_cos,v_unit_g,0.10,v_cid_ind),
-        ('Crema de Caléndula Orgánica 100ml',v_cat_cos,v_unit_ml,0.12,v_cid_ind),
-        ('Aceite Facial de Noche Bakuchiol 30ml',v_cat_cos,v_unit_ml,0.05,v_cid_ind),
-        ('Gel de Aloe Vera Puro 500ml',v_cat_cos,v_unit_ml,0.55,v_cid_ind),
-        ('Crema Corporal de Manteca de Karité 250ml',v_cat_cos,v_unit_ml,0.27,v_cid_ind);
+    CALL sp_upsert_product('Sérum Vitamina C 30ml',v_cat_cos,v_unit_ml,0.08,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Crema Hidratante Aloe Vera 150ml',v_cat_cos,v_unit_ml,0.18,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Mascarilla de Arcilla Verde 200g',v_cat_cos,v_unit_g,0.22,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Contorno de Ojos Retinol 20ml',v_cat_cos,v_unit_ml,0.05,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Exfoliante de Café 300g',v_cat_cos,v_unit_g,0.33,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Tónico Facial de Agua de Rosas 200ml',v_cat_cos,v_unit_ml,0.22,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Crema Antienvejecimiento Q10 50ml',v_cat_cos,v_unit_ml,0.08,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Protector Solar Natural SPF50 100ml',v_cat_cos,v_unit_ml,0.12,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Mascarilla de Carbón Activado 150ml',v_cat_cos,v_unit_ml,0.17,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Sérum Hialurónico 30ml',v_cat_cos,v_unit_ml,0.05,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Bálsamo de Cúrcuma 80g',v_cat_cos,v_unit_g,0.10,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Crema de Caléndula Orgánica 100ml',v_cat_cos,v_unit_ml,0.12,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Aceite Facial de Noche Bakuchiol 30ml',v_cat_cos,v_unit_ml,0.05,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Gel de Aloe Vera Puro 500ml',v_cat_cos,v_unit_ml,0.55,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Crema Corporal de Manteca de Karité 250ml',v_cat_cos,v_unit_ml,0.27,v_cid_ind,v_prod);
 
     -- Capilar (15 productos)
-    INSERT INTO products(product_name,category_id,unit_id,unit_weight_kg,origin_country_id) VALUES
-        ('Shampoo de Keratina Natural 400ml',v_cat_cap,v_unit_ml,0.44,v_cid_ind),
-        ('Acondicionador Proteínas de Seda 400ml',v_cat_cap,v_unit_ml,0.44,v_cid_ind),
-        ('Mascarilla Capilar Aguacate 300g',v_cat_cap,v_unit_g,0.33,v_cid_bra),
-        ('Sérum Anticaída con Biotina 100ml',v_cat_cap,v_unit_ml,0.12,v_cid_ind),
-        ('Aceite Capilar de Argán Marroquí 100ml',v_cat_cap,v_unit_ml,0.12,v_cid_ind),
-        ('Shampoo en Barra sin Sulfatos 80g',v_cat_cap,v_unit_g,0.10,v_cid_fra),
-        ('Tratamiento Capilar de Ricino 150ml',v_cat_cap,v_unit_ml,0.17,v_cid_ind),
-        ('Ampolletas de Colágeno Capilar 12un',v_cat_cap,v_unit_un,0.15,v_cid_ind),
-        ('Crema para Peinar sin Enjuague 200ml',v_cat_cap,v_unit_ml,0.22,v_cid_ind),
-        ('Spray Protector Térmico Natural 200ml',v_cat_cap,v_unit_ml,0.22,v_cid_fra),
-        ('Champú de Romero y Menta 300ml',v_cat_cap,v_unit_ml,0.33,v_cid_fra),
-        ('Bálsamo Labial Natural Cacao 10g',v_cat_cap,v_unit_g,0.01,v_cid_bra),
-        ('Tónico Capilar Jengibre 100ml',v_cat_cap,v_unit_ml,0.12,v_cid_ind),
-        ('Mascarilla Proteínas Quinoa 250g',v_cat_cap,v_unit_g,0.27,v_cid_bra),
-        ('Aceite de Cacay para Cabello 50ml',v_cat_cap,v_unit_ml,0.06,v_cid_bra);
+    CALL sp_upsert_product('Shampoo de Keratina Natural 400ml',v_cat_cap,v_unit_ml,0.44,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Acondicionador Proteínas de Seda 400ml',v_cat_cap,v_unit_ml,0.44,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Mascarilla Capilar Aguacate 300g',v_cat_cap,v_unit_g,0.33,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Sérum Anticaída con Biotina 100ml',v_cat_cap,v_unit_ml,0.12,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Aceite Capilar de Argán Marroquí 100ml',v_cat_cap,v_unit_ml,0.12,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Shampoo en Barra sin Sulfatos 80g',v_cat_cap,v_unit_g,0.10,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Tratamiento Capilar de Ricino 150ml',v_cat_cap,v_unit_ml,0.17,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Ampolletas de Colágeno Capilar 12un',v_cat_cap,v_unit_un,0.15,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Crema para Peinar sin Enjuague 200ml',v_cat_cap,v_unit_ml,0.22,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Spray Protector Térmico Natural 200ml',v_cat_cap,v_unit_ml,0.22,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Champú de Romero y Menta 300ml',v_cat_cap,v_unit_ml,0.33,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Bálsamo Labial Natural Cacao 10g',v_cat_cap,v_unit_g,0.01,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Tónico Capilar Jengibre 100ml',v_cat_cap,v_unit_ml,0.12,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Mascarilla Proteínas Quinoa 250g',v_cat_cap,v_unit_g,0.27,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Aceite de Cacay para Cabello 50ml',v_cat_cap,v_unit_ml,0.06,v_cid_bra,v_prod);
 
     -- Bebidas Naturales (12 productos)
-    INSERT INTO products(product_name,category_id,unit_id,unit_weight_kg,origin_country_id) VALUES
-        ('Té Verde Matcha Ceremonial 100g',v_cat_beb,v_unit_g,0.12,v_cid_ind),
-        ('Moringa en Polvo Orgánica 200g',v_cat_beb,v_unit_g,0.22,v_cid_ind),
-        ('Cúrcuma Golden Milk 300g',v_cat_beb,v_unit_g,0.33,v_cid_ind),
-        ('Kombucha Base Concentrada 500ml',v_cat_beb,v_unit_ml,0.55,v_cid_ind),
-        ('Ashwagandha en Polvo 150g',v_cat_beb,v_unit_g,0.17,v_cid_ind),
-        ('Maca Negra Andina en Polvo 200g',v_cat_beb,v_unit_g,0.22,v_cid_bra),
-        ('Spirulina Premium en Polvo 250g',v_cat_beb,v_unit_g,0.27,v_cid_ind),
-        ('Agua de Coco Liofilizada 150g',v_cat_beb,v_unit_g,0.17,v_cid_bra),
-        ('Té de Hibisco Jamaicano 100g',v_cat_beb,v_unit_g,0.12,v_cid_bra),
-        ('Guaraná Natural en Polvo 100g',v_cat_beb,v_unit_g,0.12,v_cid_bra),
-        ('Jengibre Liofilizado 80g',v_cat_beb,v_unit_g,0.10,v_cid_ind),
-        ('Chaga Mushroom en Polvo 100g',v_cat_beb,v_unit_g,0.12,v_cid_ind);
+    CALL sp_upsert_product('Té Verde Matcha Ceremonial 100g',v_cat_beb,v_unit_g,0.12,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Moringa en Polvo Orgánica 200g',v_cat_beb,v_unit_g,0.22,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Cúrcuma Golden Milk 300g',v_cat_beb,v_unit_g,0.33,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Kombucha Base Concentrada 500ml',v_cat_beb,v_unit_ml,0.55,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Ashwagandha en Polvo 150g',v_cat_beb,v_unit_g,0.17,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Maca Negra Andina en Polvo 200g',v_cat_beb,v_unit_g,0.22,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Spirulina Premium en Polvo 250g',v_cat_beb,v_unit_g,0.27,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Agua de Coco Liofilizada 150g',v_cat_beb,v_unit_g,0.17,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Té de Hibisco Jamaicano 100g',v_cat_beb,v_unit_g,0.12,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Guaraná Natural en Polvo 100g',v_cat_beb,v_unit_g,0.12,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Jengibre Liofilizado 80g',v_cat_beb,v_unit_g,0.10,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Chaga Mushroom en Polvo 100g',v_cat_beb,v_unit_g,0.12,v_cid_ind,v_prod);
 
     -- Alimentos Funcionales (12 productos)
-    INSERT INTO products(product_name,category_id,unit_id,unit_weight_kg,origin_country_id) VALUES
-        ('Aceite MCT de Coco Puro 500ml',v_cat_ali,v_unit_ml,0.55,v_cid_ind),
-        ('Colágeno Marino Hidrolizado 300g',v_cat_ali,v_unit_g,0.33,v_cid_ind),
-        ('Proteína de Cáñamo Orgánica 500g',v_cat_ali,v_unit_g,0.55,v_cid_ind),
-        ('Cacao Crudo en Polvo 250g',v_cat_ali,v_unit_g,0.27,v_cid_bra),
-        ('Levadura Nutricional 200g',v_cat_ali,v_unit_g,0.22,v_cid_ind),
-        ('Polen de Abeja Orgánico 250g',v_cat_ali,v_unit_g,0.27,v_cid_bra),
-        ('Semillas de Chía Orgánica 500g',v_cat_ali,v_unit_g,0.55,v_cid_bra),
-        ('Aceite de Hígado de Bacalao 250ml',v_cat_ali,v_unit_ml,0.27,v_cid_ind),
-        ('Inulina de Achicoria 300g',v_cat_ali,v_unit_g,0.33,v_cid_bra),
-        ('Clorela en Tabletas 250un',v_cat_ali,v_unit_un,0.28,v_cid_ind),
-        ('Quercetina con Bromelina 90caps',v_cat_ali,v_unit_un,0.10,v_cid_ind),
-        ('Probiótico Multicepa 60caps',v_cat_ali,v_unit_un,0.07,v_cid_ind);
+    CALL sp_upsert_product('Aceite MCT de Coco Puro 500ml',v_cat_ali,v_unit_ml,0.55,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Colágeno Marino Hidrolizado 300g',v_cat_ali,v_unit_g,0.33,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Proteína de Cáñamo Orgánica 500g',v_cat_ali,v_unit_g,0.55,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Cacao Crudo en Polvo 250g',v_cat_ali,v_unit_g,0.27,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Levadura Nutricional 200g',v_cat_ali,v_unit_g,0.22,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Polen de Abeja Orgánico 250g',v_cat_ali,v_unit_g,0.27,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Semillas de Chía Orgánica 500g',v_cat_ali,v_unit_g,0.55,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Aceite de Hígado de Bacalao 250ml',v_cat_ali,v_unit_ml,0.27,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Inulina de Achicoria 300g',v_cat_ali,v_unit_g,0.33,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Clorela en Tabletas 250un',v_cat_ali,v_unit_un,0.28,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Quercetina con Bromelina 90caps',v_cat_ali,v_unit_un,0.10,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Probiótico Multicepa 60caps',v_cat_ali,v_unit_un,0.07,v_cid_ind,v_prod);
 
     -- Jabones Artesanales (14 productos)
-    INSERT INTO products(product_name,category_id,unit_id,unit_weight_kg,origin_country_id) VALUES
-        ('Jabón de Lavanda y Avena 100g',v_cat_jab,v_unit_g,0.11,v_cid_fra),
-        ('Jabón de Carbón Activado 100g',v_cat_jab,v_unit_g,0.11,v_cid_ind),
-        ('Jabón de Arcilla Kaolin 100g',v_cat_jab,v_unit_g,0.11,v_cid_fra),
-        ('Jabón de Leche de Cabra 100g',v_cat_jab,v_unit_g,0.11,v_cid_fra),
-        ('Jabón de Azufre Natural 100g',v_cat_jab,v_unit_g,0.11,v_cid_ind),
-        ('Jabón de Café Exfoliante 120g',v_cat_jab,v_unit_g,0.13,v_cid_bra),
-        ('Jabón de Manteca de Cacao 100g',v_cat_jab,v_unit_g,0.11,v_cid_bra),
-        ('Jabón de Rosa Mosqueta 100g',v_cat_jab,v_unit_g,0.11,v_cid_bra),
-        ('Jabón de Aloe Vera 100g',v_cat_jab,v_unit_g,0.11,v_cid_ind),
-        ('Jabón de Miel y Avena 100g',v_cat_jab,v_unit_g,0.11,v_cid_ind),
-        ('Jabón de Árbol de Té Antibacterial 100g',v_cat_jab,v_unit_g,0.11,v_cid_ind),
-        ('Jabón de Oliva Extra Virgen 100g',v_cat_jab,v_unit_g,0.11,v_cid_fra),
-        ('Jabón de Cúrcuma Antiinflamatorio 100g',v_cat_jab,v_unit_g,0.11,v_cid_ind),
-        ('Jabón de Chocolate y Café 120g',v_cat_jab,v_unit_g,0.13,v_cid_bra);
+    CALL sp_upsert_product('Jabón de Lavanda y Avena 100g',v_cat_jab,v_unit_g,0.11,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Jabón de Carbón Activado 100g',v_cat_jab,v_unit_g,0.11,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Jabón de Arcilla Kaolin 100g',v_cat_jab,v_unit_g,0.11,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Jabón de Leche de Cabra 100g',v_cat_jab,v_unit_g,0.11,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Jabón de Azufre Natural 100g',v_cat_jab,v_unit_g,0.11,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Jabón de Café Exfoliante 120g',v_cat_jab,v_unit_g,0.13,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Jabón de Manteca de Cacao 100g',v_cat_jab,v_unit_g,0.11,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Jabón de Rosa Mosqueta 100g',v_cat_jab,v_unit_g,0.11,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Jabón de Aloe Vera 100g',v_cat_jab,v_unit_g,0.11,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Jabón de Miel y Avena 100g',v_cat_jab,v_unit_g,0.11,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Jabón de Árbol de Té Antibacterial 100g',v_cat_jab,v_unit_g,0.11,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Jabón de Oliva Extra Virgen 100g',v_cat_jab,v_unit_g,0.11,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Jabón de Cúrcuma Antiinflamatorio 100g',v_cat_jab,v_unit_g,0.11,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Jabón de Chocolate y Café 120g',v_cat_jab,v_unit_g,0.13,v_cid_bra,v_prod);
 
     -- Aromaterapia (12 productos)
-    INSERT INTO products(product_name,category_id,unit_id,unit_weight_kg,origin_country_id) VALUES
-        ('Difusor Ultrasónico de Bambú 200ml',v_cat_aro,v_unit_un,0.35,v_cid_ind),
-        ('Mezcla Relax Lavanda-Bergamota 30ml',v_cat_aro,v_unit_ml,0.05,v_cid_fra),
-        ('Mezcla Energía Menta-Romero 30ml',v_cat_aro,v_unit_ml,0.05,v_cid_fra),
-        ('Mezcla Immunity Eucalipto-Árbol Té 30ml',v_cat_aro,v_unit_ml,0.05,v_cid_ind),
-        ('Velas de Cera de Abeja Lavanda 200g',v_cat_aro,v_unit_g,0.22,v_cid_fra),
-        ('Velas de Soya y Vainilla 200g',v_cat_aro,v_unit_g,0.22,v_cid_bra),
-        ('Incienso Natural de Palo Santo 20un',v_cat_aro,v_unit_un,0.04,v_cid_bra),
-        ('Incienso de Sándalo Premium 20un',v_cat_aro,v_unit_un,0.04,v_cid_ind),
-        ('Spray Ambiental Relajante 150ml',v_cat_aro,v_unit_ml,0.17,v_cid_fra),
-        ('Piedras de Lava para Difusor 50un',v_cat_aro,v_unit_un,0.15,v_cid_ind),
-        ('Kit Aromaterapia Básico 5 aceites',v_cat_aro,v_unit_un,0.25,v_cid_fra),
-        ('Collar Difusor Aromaterapia',v_cat_aro,v_unit_un,0.05,v_cid_ind);
+    CALL sp_upsert_product('Difusor Ultrasónico de Bambú 200ml',v_cat_aro,v_unit_un,0.35,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Mezcla Relax Lavanda-Bergamota 30ml',v_cat_aro,v_unit_ml,0.05,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Mezcla Energía Menta-Romero 30ml',v_cat_aro,v_unit_ml,0.05,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Mezcla Immunity Eucalipto-Árbol Té 30ml',v_cat_aro,v_unit_ml,0.05,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Velas de Cera de Abeja Lavanda 200g',v_cat_aro,v_unit_g,0.22,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Velas de Soya y Vainilla 200g',v_cat_aro,v_unit_g,0.22,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Incienso Natural de Palo Santo 20un',v_cat_aro,v_unit_un,0.04,v_cid_bra,v_prod);
+    CALL sp_upsert_product('Incienso de Sándalo Premium 20un',v_cat_aro,v_unit_un,0.04,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Spray Ambiental Relajante 150ml',v_cat_aro,v_unit_ml,0.17,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Piedras de Lava para Difusor 50un',v_cat_aro,v_unit_un,0.15,v_cid_ind,v_prod);
+    CALL sp_upsert_product('Kit Aromaterapia Básico 5 aceites',v_cat_aro,v_unit_un,0.25,v_cid_fra,v_prod);
+    CALL sp_upsert_product('Collar Difusor Aromaterapia',v_cat_aro,v_unit_un,0.05,v_cid_ind,v_prod);
 
     CALL sp_log('sp_insert_products','100 productos insertados en 7 categorías','products',NULL,'SUCCESS',NULL);
 EXCEPTION WHEN OTHERS THEN
@@ -439,7 +709,7 @@ CREATE OR REPLACE PROCEDURE sp_insert_imports()
 LANGUAGE plpgsql AS $$
 DECLARE
     v_sup1 INT; v_sup2 INT; v_sup3 INT; v_sup4 INT; v_sup5 INT;
-    v_st_rcv INT; v_st_shp INT; v_st_pnd INT;
+    v_st_rcv INT; v_st_shp INT;
     v_cur_usd INT; v_er_usd INT;
     v_ct_flete INT; v_ct_seg INT; v_ct_pto INT; v_ct_aran INT;
     v_imp INT; v_det INT;
@@ -453,21 +723,9 @@ BEGIN
     SELECT supplier_id INTO v_sup5 FROM suppliers WHERE supplier_name LIKE 'Andean%';
     SELECT status_id INTO v_st_rcv FROM import_statuses WHERE status_code='RECEIVED';
     SELECT status_id INTO v_st_shp FROM import_statuses WHERE status_code='SHIPPED';
-    SELECT status_id INTO v_st_pnd FROM import_statuses WHERE status_code='PENDING';
     SELECT currency_id INTO v_cur_usd FROM currencies WHERE currency_code='USD';
     SELECT exchange_rate_id INTO v_er_usd FROM exchange_rates
-        WHERE currency_id=v_cur_usd AND base_currency_id=v_cur_usd LIMIT 1;
-    -- Insertar un rate self-referencial USD→USD si no existe
-    IF v_er_usd IS NULL THEN
-        INSERT INTO exchange_rates(currency_id,base_currency_id,rate,rate_date,source)
-        VALUES(v_cur_usd,v_cur_usd,1.0,'2025-01-01','Sistema')
-        ON CONFLICT DO NOTHING
-        RETURNING exchange_rate_id INTO v_er_usd;
-        IF v_er_usd IS NULL THEN
-            SELECT exchange_rate_id INTO v_er_usd FROM exchange_rates
-            WHERE currency_id=v_cur_usd AND base_currency_id=v_cur_usd LIMIT 1;
-        END IF;
-    END IF;
+        WHERE currency_id=v_cur_usd AND base_currency_id=v_cur_usd AND rate_date='2025-01-01' LIMIT 1;
 
     SELECT cost_type_id INTO v_ct_flete FROM cost_types WHERE cost_type_code='FLETE';
     SELECT cost_type_id INTO v_ct_seg   FROM cost_types WHERE cost_type_code='SEGURO';
@@ -585,25 +843,23 @@ LANGUAGE plpgsql AS $$
 DECLARE
     v_wh INT; v_mt_entry INT;
     v_cur_usd INT; v_er_usd INT;
-    v_prod INT;
+    v_prod RECORD;
     v_err TEXT;
 BEGIN
     SELECT warehouse_id INTO v_wh FROM warehouses WHERE warehouse_name LIKE 'HUB-A%';
     SELECT movement_type_id INTO v_mt_entry FROM movement_types WHERE type_code='ENTRY';
     SELECT currency_id INTO v_cur_usd FROM currencies WHERE currency_code='USD';
     SELECT exchange_rate_id INTO v_er_usd FROM exchange_rates
-        WHERE currency_id=v_cur_usd AND base_currency_id=v_cur_usd LIMIT 1;
+        WHERE currency_id=v_cur_usd AND base_currency_id=v_cur_usd AND rate_date='2025-01-01' LIMIT 1;
 
     -- Registrar entrada de inventario para TODOS los productos
-    FOR v_prod IN (
-        SELECT product_id FROM products ORDER BY product_id
-    ) LOOP
+    FOR v_prod IN (SELECT product_id FROM products ORDER BY product_id) LOOP
         INSERT INTO inventory_movements(
             warehouse_id, product_id, movement_type_id,
             quantity, unit_cost, currency_id, exchange_rate_id,
             reference_type, notes
         ) VALUES (
-            v_wh, v_prod, v_mt_entry,
+            v_wh, v_prod.product_id, v_mt_entry,
             500, 10.00, v_cur_usd, v_er_usd,
             'IMPORT', 'Entrada inicial importación Q1'
         );
@@ -716,28 +972,30 @@ EXCEPTION WHEN OTHERS THEN
 END;$$;
 
 -- =============================================================
--- ORQUESTADOR v3
+-- ORQUESTADOR v4 — Con transacción explícita
 -- =============================================================
 CREATE OR REPLACE PROCEDURE sp_load_all_data()
 LANGUAGE plpgsql AS $$
 DECLARE v_err TEXT;
 BEGIN
-    RAISE NOTICE 'Iniciando carga Etheria Global v3...';
-    CALL sp_insert_catalogs();
-    CALL sp_insert_geography();
-    CALL sp_insert_exchange_rates();
-    CALL sp_insert_suppliers_warehouses();
-    CALL sp_insert_products();
-    CALL sp_insert_imports();
-    CALL sp_insert_inventory();
-    CALL sp_insert_permits();
-    CALL sp_insert_dispatch_orders();
-    CALL sp_log('sp_load_all_data','Carga completa Etheria Global v3',NULL,NULL,'SUCCESS',NULL);
-    RAISE NOTICE 'Carga Etheria Global v3 completada.';
-EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
-    CALL sp_log('sp_load_all_data','Error en carga',NULL,NULL,'ERROR',v_err);
-    RAISE;
+    RAISE NOTICE 'Iniciando carga Etheria Global v4 (UPSERT + INOUT)...';
+    BEGIN
+        CALL sp_insert_catalogs();
+        CALL sp_insert_geography();
+        CALL sp_insert_exchange_rates();
+        CALL sp_insert_suppliers_warehouses();
+        CALL sp_insert_products();
+        CALL sp_insert_imports();
+        CALL sp_insert_inventory();
+        CALL sp_insert_permits();
+        CALL sp_insert_dispatch_orders();
+        CALL sp_log('sp_load_all_data','Carga completa Etheria Global v4',NULL,NULL,'SUCCESS',NULL);
+        RAISE NOTICE 'Carga Etheria Global v4 completada.';
+    EXCEPTION WHEN OTHERS THEN
+        GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+        CALL sp_log('sp_load_all_data','Error en carga: '||v_err,NULL,NULL,'ERROR',v_err);
+        RAISE;
+    END;
 END;$$;
 
 -- Ejecutar carga completa

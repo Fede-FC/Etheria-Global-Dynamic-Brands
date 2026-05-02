@@ -49,12 +49,17 @@ def run_etl():
             conn.execute(text("""
                 TRUNCATE TABLE
                     analytics.dw_fact_sales,
-                    analytics.dw_dim_product,
-                    analytics.dw_dim_brand,
-                    analytics.dw_dim_country,
-                    analytics.dw_dim_category,
-                    analytics.dw_dim_time,
-                    analytics.dw_dim_website
+                    analytics.dw_fact_inventory,
+                    analytics.dw_fact_purchases,
+                    analytics.dim_supplier,
+                    analytics.dim_currency,
+                    analytics.dim_website,
+                    analytics.dim_brand,
+                    analytics.dim_country,
+                    analytics.dim_product,
+                    analytics.dim_category,
+                    analytics.dim_fecha,
+                    analytics.etl_profitability_summary
                 RESTART IDENTITY CASCADE
             """))
         print("Tablas analytics limpiadas")
@@ -64,34 +69,94 @@ def run_etl():
             conn.execute(text("CREATE SCHEMA IF NOT EXISTS analytics"))
         print("Esquema analytics verificado/creado")
 
-        # ── EXTRACT: Dimensiones desde Postgres ──
+        # ══════════════════════════════════════════════
+        # EXTRACT
+        # ══════════════════════════════════════════════
+
+        # ── Postgres: Dimensiones ──
         print("\nEXTRACT — Leyendo dimensiones desde Postgres...")
 
         df_products = pd.read_sql("""
-            SELECT p.product_id, p.product_name, c.category_name, u.unit_code, p.enabled
+            SELECT p.product_id, p.product_name, p.category_id, c.category_name,
+                   p.unit_id, u.unit_code, p.unit_weight_kg, p.origin_country_id, p.enabled
             FROM products p
             JOIN categories c ON p.category_id = c.category_id
             JOIN measurement_units u ON p.unit_id = u.unit_id
         """, engine_pg)
         print(f"  Products: {len(df_products)} filas")
 
+        df_categories = pd.read_sql("""
+            SELECT category_id, category_name, description FROM categories
+        """, engine_pg)
+        print(f"  Categories: {len(df_categories)} filas")
+
         df_countries_pg = pd.read_sql("""
-            SELECT country_id, country_name, iso_code, region
+            SELECT country_id, country_name, iso_code, region, currency_id
             FROM countries WHERE enabled = TRUE
         """, engine_pg)
         print(f"  Countries PG: {len(df_countries_pg)} filas")
 
-        df_categories = pd.read_sql("""
-            SELECT category_id, category_name FROM categories
+        df_currencies = pd.read_sql("""
+            SELECT currency_id, currency_code, currency_name, currency_symbol, is_base
+            FROM currencies WHERE enabled = TRUE
         """, engine_pg)
-        print(f"  Categories: {len(df_categories)} filas")
+        print(f"  Currencies: {len(df_currencies)} filas")
 
-        # ── EXTRACT: Dimensiones desde MySQL ──
+        df_suppliers = pd.read_sql("""
+            SELECT s.supplier_id, s.supplier_name, s.country_id, c.country_name
+            FROM suppliers s
+            LEFT JOIN countries c ON s.country_id = c.country_id
+            WHERE s.enabled = TRUE
+        """, engine_pg)
+        print(f"  Suppliers: {len(df_suppliers)} filas")
+
+        # ── Postgres: Hechos de inventario ──
+        df_inv_movements = pd.read_sql("""
+            SELECT
+                im.product_id, im.warehouse_id, p.category_id,
+                im.moved_at,
+                mt.type_code AS movement_type,
+                im.quantity, im.unit_cost,
+                cur.currency_code,
+                im.reference_type, im.reference_id
+            FROM inventory_movements im
+            JOIN movement_types mt ON im.movement_type_id = mt.movement_type_id
+            JOIN products p ON im.product_id = p.product_id
+            JOIN currencies cur ON im.currency_id = cur.currency_id
+        """, engine_pg)
+        print(f"  Inventory Movements: {len(df_inv_movements)} filas")
+
+        # ── Postgres: Hechos de compras ──
+        df_import_details = pd.read_sql("""
+            SELECT
+                id.import_id, i.supplier_id, id.product_id, p.category_id,
+                i.import_date, id.quantity, id.unit_cost, id.subtotal,
+                cur.currency_code
+            FROM import_details id
+            JOIN imports i ON id.import_id = i.import_id
+            JOIN products p ON id.product_id = p.product_id
+            JOIN currencies cur ON id.currency_id = cur.currency_id
+        """, engine_pg)
+        print(f"  Import Details: {len(df_import_details)} filas")
+
+        df_import_costs = pd.read_sql("""
+            SELECT
+                ic.import_id, ct.applies_to,
+                SUM(ic.amount) AS total_cost,
+                cur.currency_code
+            FROM import_costs ic
+            JOIN cost_types ct ON ic.cost_type_id = ct.cost_type_id
+            JOIN currencies cur ON ic.currency_id = cur.currency_id
+            GROUP BY ic.import_id, ct.applies_to, cur.currency_code
+        """, engine_pg)
+        print(f"  Import Costs: {len(df_import_costs)} filas")
+
+        # ── MySQL: Dimensiones ──
         print("\nEXTRACT — Leyendo dimensiones desde MySQL...")
 
         df_brands = pd.read_sql("""
-            SELECT b.brand_id, b.brand_name, b.ai_model_version as ai_model,
-                   bf.focus_name as focus, NULL as description
+            SELECT b.brand_id, b.brand_name, b.ai_model_version AS ai_model,
+                   bf.focus_name AS focus
             FROM Brands b
             LEFT JOIN Brand_focuses bf ON b.focus_id = bf.focus_id
             WHERE b.enabled = 1
@@ -99,19 +164,20 @@ def run_etl():
         print(f"  Brands: {len(df_brands)} filas")
 
         df_websites = pd.read_sql("""
-            SELECT w.website_id, w.site_url as website_name, w.brand_id
+            SELECT w.website_id, w.site_url AS website_url, w.brand_id,
+                   w.country_id, w.marketing_focus
             FROM Websites w
             WHERE w.enabled = 1
         """, engine_my)
         print(f"  Websites: {len(df_websites)} filas")
 
         df_countries_my = pd.read_sql("""
-            SELECT country_id, country_name, iso_code, NULL as region
+            SELECT country_id, country_name, iso_code
             FROM Countries WHERE enabled = 1
         """, engine_my)
         print(f"  Countries MY: {len(df_countries_my)} filas")
 
-        # ── EXTRACT: Hechos (Ventas) desde MySQL ──
+        # ── MySQL: Hechos de Ventas ──
         print("\nEXTRACT — Leyendo hechos (ventas) desde MySQL...")
 
         df_orders = pd.read_sql("""
@@ -126,7 +192,7 @@ def run_etl():
                 o.total_amount_base,
                 o.total_amount_local,
                 o.currency_id,
-                o.order_date as delivery_date,
+                o.order_date AS delivery_date,
                 w.brand_id,
                 w.website_id,
                 c.country_id AS website_country_id
@@ -140,88 +206,169 @@ def run_etl():
         """, engine_my)
         print(f"  Orders: {len(df_orders)} items")
 
-        # ── TRANSFORM: Crear tabla de tiempo ──
+        # ── MySQL: Shipping costs ──
+        df_shipping = pd.read_sql("""
+            SELECT
+                sr.order_id,
+                sr.shipping_cost_base,
+                sr.actual_delivery_date,
+                sr.estimated_delivery_date
+            FROM Shipping_records sr
+            WHERE sr.enabled = 1
+        """, engine_my)
+        print(f"  Shipping records: {len(df_shipping)} filas")
+
+        # ══════════════════════════════════════════════
+        # TRANSFORM
+        # ══════════════════════════════════════════════
         print("\nTRANSFORM — Procesando datos...")
 
-        # Generar dim_time
-        dates = pd.concat([
-            pd.to_datetime(df_orders["delivery_date"], errors='coerce')
-        ]).dropna().unique()
+        # Generar dim_fecha
+        dates = pd.to_datetime(df_orders["delivery_date"], errors='coerce').dropna()
+        if len(df_inv_movements) > 0:
+            inv_dates = pd.to_datetime(df_inv_movements["moved_at"], errors='coerce').dropna()
+            dates = pd.concat([dates, inv_dates]).drop_duplicates()
+        if len(df_import_details) > 0:
+            imp_dates = pd.to_datetime(df_import_details["import_date"], errors='coerce').dropna()
+            dates = pd.concat([dates, imp_dates]).drop_duplicates()
 
+        dates = dates.unique()
         df_time = pd.DataFrame({
             "date_key": [int(d.strftime("%Y%m%d")) for d in dates],
             "full_date": dates,
             "year": [d.year for d in dates],
             "quarter": [d.quarter for d in dates],
             "month": [d.month for d in dates],
+            "month_name": [d.strftime("%B") for d in dates],
             "week": [d.isocalendar()[1] for d in dates],
             "day": [d.day for d in dates],
             "day_of_week": [d.strftime("%A") for d in dates],
-            "is_weekend": [d.weekday() >= 5 for d in dates]
+            "day_of_week_num": [d.weekday() for d in dates],
+            "is_weekend": [d.weekday() >= 5 for d in dates],
+            "is_month_end": [d.day == (d + pd.offsets.MonthEnd(0)).day for d in dates],
+            "semester": [1 if d.month <= 6 else 2 for d in dates]
         })
-        print(f"  Dim Time: {len(df_time)} fechas únicas")
+        print(f"  Dim Fecha: {len(df_time)} fechas únicas")
 
-        # ── LOAD: Dimensiones en Analytics ──
+        # ══════════════════════════════════════════════
+        # LOAD — Dimensiones
+        # ══════════════════════════════════════════════
         print("\nLOAD — Cargando dimensiones en analytics...")
 
-        # Dim Product
-        df_products_load = df_products.rename(columns={
-            "product_id": "product_id",
-            "product_name": "product_name",
-            "category_name": "category_name",
-            "unit_code": "unit_code",
-            "enabled": "enabled"
-        })[["product_id", "product_name", "category_name", "unit_code", "enabled"]]
-
-        df_products_load.to_sql("dw_dim_product", engine_pg, schema="analytics",
-                                if_exists="append", index=False, method="multi")
-        print(f"  dw_dim_product: {len(df_products_load)} filas")
-
-        # Dim Brand
-        df_brands_load = df_brands.rename(columns={
-            "brand_id": "brand_id",
-            "brand_name": "brand_name",
-            "description": "description",
-            "focus": "focus",
-            "ai_model": "ai_model"
-        })[["brand_id", "brand_name", "description", "focus", "ai_model"]]
-
-        df_brands_load.to_sql("dw_dim_brand", engine_pg, schema="analytics",
-                               if_exists="append", index=False, method="multi")
-        print(f"  dw_dim_brand: {len(df_brands_load)} filas")
-
-        # Dim Country (combinar PG y MY)
-        df_countries_all = pd.concat([
-            df_countries_pg[["country_id", "country_name", "iso_code", "region"]],
-            df_countries_my[["country_id", "country_name", "iso_code", "region"]]
-        ]).drop_duplicates(subset=["country_id"])
-        df_countries_all.to_sql("dw_dim_country", engine_pg, schema="analytics",
-                                if_exists="append", index=False, method="multi")
-        print(f"  dw_dim_country: {len(df_countries_all)} filas")
+        # Dim Fecha
+        df_time.to_sql("dim_fecha", engine_pg, schema="analytics",
+                       if_exists="append", index=False, method="multi")
+        print(f"  dim_fecha: {len(df_time)} filas")
 
         # Dim Category
-        df_categories.to_sql("dw_dim_category", engine_pg, schema="analytics",
-                               if_exists="append", index=False, method="multi")
-        print(f"  dw_dim_category: {len(df_categories)} filas")
+        df_categories.to_sql("dim_category", engine_pg, schema="analytics",
+                             if_exists="append", index=False, method="multi")
+        print(f"  dim_category: {len(df_categories)} filas")
+
+        # Dim Product
+        df_products.to_sql("dim_product", engine_pg, schema="analytics",
+                           if_exists="append", index=False, method="multi")
+        print(f"  dim_product: {len(df_products)} filas")
+
+        # Dim Country (combinar PG y MY)
+        df_countries_pg["source"] = "PG"
+        df_countries_my["source"] = "MY"
+        # Alinear columnas
+        df_countries_my["region"] = None
+        df_countries_my["currency_id"] = None
+        df_countries_all = pd.concat([
+            df_countries_pg[["country_id","country_name","iso_code","region"]],
+            df_countries_my[["country_id","country_name","iso_code","region"]]
+        ]).drop_duplicates(subset=["country_id"])
+        df_countries_all.to_sql("dim_country", engine_pg, schema="analytics",
+                                if_exists="append", index=False, method="multi")
+        print(f"  dim_country: {len(df_countries_all)} filas")
+
+        # Dim Currency
+        df_currencies.to_sql("dim_currency", engine_pg, schema="analytics",
+                             if_exists="append", index=False, method="multi")
+        print(f"  dim_currency: {len(df_currencies)} filas")
+
+        # Dim Brand
+        df_brands["description"] = None
+        df_brands[["brand_id","brand_name","focus","ai_model","description"]].to_sql(
+            "dim_brand", engine_pg, schema="analytics",
+            if_exists="append", index=False, method="multi")
+        print(f"  dim_brand: {len(df_brands)} filas")
 
         # Dim Website
-        df_websites_load = df_websites.rename(columns={
-            "website_id": "website_id",
-            "website_url": "website_name",
-            "brand_id": "brand_id"
-        })[["website_id", "website_name", "brand_id"]]
+        df_websites.to_sql("dim_website", engine_pg, schema="analytics",
+                           if_exists="append", index=False, method="multi")
+        print(f"  dim_website: {len(df_websites)} filas")
 
-        df_websites_load.to_sql("dw_dim_website", engine_pg, schema="analytics",
-                                 if_exists="append", index=False, method="multi")
-        print(f"  dw_dim_website: {len(df_websites_load)} filas")
+        # Dim Supplier
+        df_suppliers.to_sql("dim_supplier", engine_pg, schema="analytics",
+                            if_exists="append", index=False, method="multi")
+        print(f"  dim_supplier: {len(df_suppliers)} filas")
 
-        # Dim Time
-        df_time.to_sql("dw_dim_time", engine_pg, schema="analytics",
-                        if_exists="append", index=False, method="multi")
-        print(f"  dw_dim_time: {len(df_time)} filas")
+        # ══════════════════════════════════════════════
+        # LOAD — Fact Inventory
+        # ══════════════════════════════════════════════
+        print("\nLOAD — Cargando fact_inventory...")
 
-        # ── TRANSFORM: Fact Sales ──
-        print("\nTRANSFORM — Calculando hechos de ventas...")
+        if len(df_inv_movements) > 0:
+            df_inv_movements["date_key"] = pd.to_datetime(df_inv_movements["moved_at"], errors='coerce').apply(
+                lambda x: int(x.strftime("%Y%m%d")) if pd.notnull(x) else 0)
+
+            df_inv_load = df_inv_movements[[
+                "product_id", "warehouse_id", "category_id", "date_key",
+                "movement_type", "quantity", "unit_cost", "currency_code",
+                "reference_type", "reference_id"
+            ]].copy()
+            df_inv_load["total_cost"] = df_inv_load["quantity"] * df_inv_load["unit_cost"]
+            df_inv_load.to_sql("dw_fact_inventory", engine_pg, schema="analytics",
+                               if_exists="append", index=False, method="multi")
+            print(f"  dw_fact_inventory: {len(df_inv_load)} filas")
+
+        # ══════════════════════════════════════════════
+        # LOAD — Fact Purchases
+        # ══════════════════════════════════════════════
+        print("\nLOAD — Cargando fact_purchases...")
+
+        if len(df_import_details) > 0:
+            df_import_details["date_key"] = pd.to_datetime(df_import_details["import_date"], errors='coerce').apply(
+                lambda x: int(x.strftime("%Y%m%d")) if pd.notnull(x) else 0)
+
+            # Pivot import costs
+            if len(df_import_costs) > 0:
+                costs_pivot = df_import_costs.pivot_table(
+                    index="import_id", columns="applies_to", values="total_cost", aggfunc="sum"
+                ).reset_index()
+                for col in ["LOGISTIC","TARIFF"]:
+                    if col not in costs_pivot.columns:
+                        costs_pivot[col] = 0
+
+            df_purchases = df_import_details.merge(
+                costs_pivot[["import_id","LOGISTIC","TARIFF"]],
+                on="import_id", how="left"
+            ).fillna(0)
+
+            df_purchases_load = df_purchases[[
+                "import_id", "supplier_id", "product_id", "category_id", "date_key",
+                "quantity", "unit_cost", "subtotal", "currency_code"
+            ]].copy()
+            df_purchases_load["freight_cost"] = 0
+            df_purchases_load["insurance_cost"] = 0
+            df_purchases_load["port_cost"] = 0
+            df_purchases_load.to_sql("dw_fact_purchases", engine_pg, schema="analytics",
+                                     if_exists="append", index=False, method="multi")
+            print(f"  dw_fact_purchases: {len(df_purchases_load)} filas")
+
+        # ══════════════════════════════════════════════
+        # LOAD — Fact Sales
+        # ══════════════════════════════════════════════
+        print("\nLOAD — Cargando fact_sales...")
+
+        # Merge shipping costs
+        if len(df_shipping) > 0:
+            df_orders = df_orders.merge(df_shipping, on="order_id", how="left")
+        else:
+            df_orders["shipping_cost_base"] = 0
 
         # Obtener costos desde Postgres
         df_costs = pd.read_sql("""
@@ -240,16 +387,14 @@ def run_etl():
         df_products_cat = pd.read_sql("""
             SELECT product_id, category_id FROM products
         """, engine_pg)
-        
-        # Join orders con products para obtener category_id
+
         df_orders = df_orders.merge(
             df_products_cat[["product_id", "category_id"]],
             left_on="etheria_product_id",
             right_on="product_id",
             how="left"
-        ).drop(columns=["product_id"])  # Eliminar columna duplicada
+        ).drop(columns=["product_id_y"] if "product_id_y" in df_orders.columns else [])
 
-        # Join orders con costos
         df_fact = df_orders.merge(
             df_costs[["product_id", "total_import_cost", "total_logistics_cost"]],
             left_on="etheria_product_id",
@@ -257,25 +402,29 @@ def run_etl():
             how="left"
         ).fillna(0).drop(columns=["product_id"])
 
-        # Calcular costos y métricas
-        df_fact["shipping_cost"] = 0
-        df_fact["total_cost"] = df_fact["total_import_cost"] + df_fact["total_logistics_cost"] + df_fact["shipping_cost"]
+        # Calcular métricas
+        df_fact["shipping_cost"] = df_fact["shipping_cost_base"].fillna(0)
+        df_fact["total_cost"] = (
+            df_fact["total_import_cost"] +
+            df_fact["total_logistics_cost"] +
+            df_fact["shipping_cost"]
+        )
         df_fact["revenue"] = df_fact["subtotal"]
         df_fact["profit"] = df_fact["revenue"] - df_fact["total_cost"]
-        df_fact["margin_percent"] = (df_fact["profit"] / df_fact["revenue"].replace(0, 1)) * 100
-        # Renombrar para coincidir con el esquema de la tabla
+        df_fact["margin_percent"] = (
+            df_fact["profit"] / df_fact["revenue"].replace(0, 1)
+        ) * 100
         df_fact = df_fact.rename(columns={"total_import_cost": "import_cost"})
 
-        # Obtener currency_code
+        # Currency code
         df_currency = pd.read_sql("SELECT currency_id, currency_code FROM Currencies", engine_my)
         df_fact = df_fact.merge(df_currency, on="currency_id", how="left")
+        df_fact["currency_code"] = df_fact["currency_code"].fillna("USD")
 
-        # Crear date_key
+        # Date key
         df_fact["date_key"] = pd.to_datetime(df_fact["delivery_date"], errors='coerce').apply(
-            lambda x: int(x.strftime("%Y%m%d")) if pd.notnull(x) else 0
-        )
+            lambda x: int(x.strftime("%Y%m%d")) if pd.notnull(x) else 0)
 
-        # Preparar para carga
         df_fact_load = df_fact[[
             "order_id", "etheria_product_id", "brand_id", "website_id",
             "website_country_id", "category_id", "date_key",
@@ -288,13 +437,13 @@ def run_etl():
             "subtotal": "total_amount"
         })
 
-        # ── LOAD: Fact Sales ──
-        print("\nLOAD — Cargando hechos en analytics.dw_fact_sales...")
         df_fact_load.to_sql("dw_fact_sales", engine_pg, schema="analytics",
-                           if_exists="append", index=False, method="multi")
+                            if_exists="append", index=False, method="multi")
         print(f"  dw_fact_sales: {len(df_fact_load)} filas")
 
-        # ── MANTENER ETL_PROFITABILITY_SUMMARY (original) ──
+        # ══════════════════════════════════════════════
+        # LOAD — ETL Profitability Summary
+        # ══════════════════════════════════════════════
         print("\nLOAD — Cargando etl_profitability_summary...")
 
         base_currency = "USD"
@@ -441,7 +590,7 @@ def run_etl():
         })
 
         summary_out.to_sql("etl_profitability_summary", engine_pg, schema="analytics",
-                           if_exists="replace", index=False, method="multi")
+                           if_exists="append", index=False, method="multi")
         print(f"  etl_profitability_summary: {len(summary_out)} filas")
 
         print("\n" + "=" * 60)
