@@ -1,7 +1,8 @@
 -- =============================================================
---  ETHERIA GLOBAL — SPs + Datos v2
+--  ETHERIA GLOBAL — SPs + Datos v3
+--  Con manejo de excepciones y SP de logging
 -- =============================================================
--- \c etheria_global_db;
+\c etheria_global_db;
 
 -- =============================================================
 -- SP DE LOG (llamado por todos los demás SPs)
@@ -13,7 +14,7 @@ CREATE OR REPLACE PROCEDURE sp_log(
 ) LANGUAGE plpgsql AS $$
 BEGIN
     INSERT INTO process_log(sp_name,action_description,affected_table,
-                            affected_record_id,status,error_detail)
+                             affected_record_id,status,error_detail)
     VALUES(p_sp,p_desc,p_table,p_id,p_status,p_error);
 END;$$;
 
@@ -98,25 +99,16 @@ BEGIN
     INSERT INTO warehouse_types(type_code,type_name)
     VALUES
         ('RECEIVING','Recepción de Mercancía'),
-        ('LABELING','Etiquetado y Marcas'),
-        ('DISPATCH','Despacho'),
-        ('MIXED','Uso Mixto')
+        ('LABELING','Etiquetado de Marca'),
+        ('DISPATCH','Despacho a País Destino'),
+        ('MIXED','Multipropósito')
     ON CONFLICT(type_code) DO NOTHING;
 
-    -- MovementTypes
-    INSERT INTO movement_types(type_code,type_name,direction)
-    VALUES
-        ('ENTRY','Entrada por Importación',1),
-        ('DISPATCH','Salida por Despacho',-1),
-        ('ADJUSTMENT','Ajuste de Inventario',1),
-        ('RETURN','Devolución',1),
-        ('LOSS','Pérdida/Merma',-1)
-    ON CONFLICT(type_code) DO NOTHING;
-
-    CALL sp_log('sp_insert_catalogs','Catálogos insertados','currencies',NULL,'SUCCESS');
+    CALL sp_log('sp_insert_catalogs','Catálogos base insertados exitosamente','categories',NULL,'SUCCESS',NULL);
+    
 EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
-    CALL sp_log('sp_insert_catalogs','Error en catálogos',NULL,NULL,'ERROR',v_err);
+    CALL sp_log('sp_insert_catalogs','Error en inserción de catálogos',NULL,NULL,'ERROR',v_err);
     RAISE;
 END;$$;
 
@@ -187,7 +179,7 @@ BEGIN
     VALUES('Puerto de Bluefields, Zona Franca Caribe Sur',v_city)
     RETURNING address_id INTO v_addr;
 
-    CALL sp_log('sp_insert_geography','Geografía insertada: 6 países','countries',NULL,'SUCCESS');
+    CALL sp_log('sp_insert_geography','Geografía insertada: 6 países','countries',NULL,'SUCCESS',NULL);
 EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
     CALL sp_log('sp_insert_geography','Error geografía',NULL,NULL,'ERROR',v_err);
@@ -224,7 +216,7 @@ BEGIN
         (v_crc,v_usd,520.00,'2025-06-01','BCCR')
     ON CONFLICT(currency_id,base_currency_id,rate_date) DO NOTHING;
 
-    CALL sp_log('sp_insert_exchange_rates','Tipos de cambio insertados','exchange_rates',NULL,'SUCCESS');
+    CALL sp_log('sp_insert_exchange_rates','Tipos de cambio insertados','exchange_rates',NULL,'SUCCESS',NULL);
 EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
     CALL sp_log('sp_insert_exchange_rates','Error tipos de cambio',NULL,NULL,'ERROR',v_err);
@@ -278,7 +270,7 @@ BEGIN
     INSERT INTO warehouses(warehouse_name,address_id,warehouse_type_id,capacity_units) VALUES
         ('HUB-C Despacho Internacional',v_addr,v_wt,4000);
 
-    CALL sp_log('sp_insert_suppliers_warehouses','5 proveedores y 3 almacenes insertados',NULL,NULL,'SUCCESS');
+    CALL sp_log('sp_insert_suppliers_warehouses','5 proveedores y 3 almacenes insertados',NULL,NULL,'SUCCESS',NULL);
 EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
     CALL sp_log('sp_insert_suppliers_warehouses','Error proveedores/almacenes',NULL,NULL,'ERROR',v_err);
@@ -294,7 +286,7 @@ DECLARE
     v_cat_ace INT; v_cat_cos INT; v_cat_cap INT; v_cat_beb INT;
     v_cat_ali INT; v_cat_jab INT; v_cat_aro INT;
     v_unit_l INT; v_unit_ml INT; v_unit_kg INT; v_unit_g INT; v_unit_un INT;
-    v_cid_ind INT; v_cid_bra INT; v_cid_fra INT;
+    v_cid_ind INT; v_cid_bra INT; v_cid_fra;
     v_err TEXT;
 BEGIN
     SELECT category_id INTO v_cat_ace FROM categories WHERE category_name='Aceites Esenciales';
@@ -324,7 +316,6 @@ BEGIN
         ('Aceite de Argán Puro 100ml',v_cat_ace,v_unit_ml,0.12,v_cid_ind),
         ('Aceite de Jojoba 100ml',v_cat_ace,v_unit_ml,0.12,v_cid_ind),
         ('Aceite de Almendras Dulces 250ml',v_cat_ace,v_unit_ml,0.27,v_cid_ind),
-        ('Aceite de Ricino Premium 200ml',v_cat_ace,v_unit_ml,0.22,v_cid_ind),
         ('Aceite Esencial de Bergamota 15ml',v_cat_ace,v_unit_ml,0.03,v_cid_fra),
         ('Aceite Esencial de Ylang Ylang 15ml',v_cat_ace,v_unit_ml,0.03,v_cid_ind),
         ('Aceite Esencial de Limón 30ml',v_cat_ace,v_unit_ml,0.05,v_cid_bra),
@@ -434,7 +425,7 @@ BEGIN
         ('Kit Aromaterapia Básico 5 aceites',v_cat_aro,v_unit_un,0.25,v_cid_fra),
         ('Collar Difusor Aromaterapia',v_cat_aro,v_unit_un,0.05,v_cid_ind);
 
-    CALL sp_log('sp_insert_products','100 productos insertados en 7 categorías','products',NULL,'SUCCESS');
+    CALL sp_log('sp_insert_products','100 productos insertados en 7 categorías','products',NULL,'SUCCESS',NULL);
 EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
     CALL sp_log('sp_insert_products','Error productos',NULL,NULL,'ERROR',v_err);
@@ -579,7 +570,7 @@ BEGIN
           (v_imp,v_ct_seg,120,v_cur_usd,v_er_usd),
           (v_imp,v_ct_pto,80,v_cur_usd,v_er_usd);
 
-    CALL sp_log('sp_insert_imports','5 importaciones con costos detallados','imports',NULL,'SUCCESS');
+    CALL sp_log('sp_insert_imports','5 importaciones con costos detallados','imports',NULL,'SUCCESS',NULL);
 EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
     CALL sp_log('sp_insert_imports','Error importaciones',NULL,NULL,'ERROR',v_err);
@@ -618,7 +609,7 @@ BEGIN
         );
     END LOOP;
 
-    CALL sp_log('sp_insert_inventory','Movimientos de inventario registrados','inventory_movements',NULL,'SUCCESS');
+    CALL sp_log('sp_insert_inventory','Movimientos de inventario registrados','inventory_movements',NULL,'SUCCESS',NULL);
 EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
     CALL sp_log('sp_insert_inventory','Error inventario',NULL,NULL,'ERROR',v_err);
@@ -663,104 +654,8 @@ BEGIN
         VALUES(v_prod,v_cid_cri,v_pt_min,CONCAT('MIN-2025-',LPAD(v_prod::TEXT,4,'0')),'2025-01-01','2027-12-31',100+(v_prod%4)*12,v_cur_usd,v_er_usd,v_st_active) ON CONFLICT(product_id,destination_country_id,permit_type_id) DO NOTHING;
         v_counter := v_counter + 1;
     END LOOP;
-    CALL sp_log('sp_insert_permits',CONCAT(v_counter*5,' permisos en 5 países'),'product_permits',NULL,'SUCCESS');
-EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
-    CALL sp_log('sp_insert_permits','Error permisos',NULL,NULL,'ERROR',v_err);
-    RAISE;
-END;$$;
 
--- =============================================================
--- SP 9 — Dispatch orders
--- =============================================================
-CREATE OR REPLACE PROCEDURE sp_insert_dispatch_orders()
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_cur_usd INT; v_er_usd INT; v_wh_disp INT; v_st_disp INT;
-    v_cid_col INT; v_cid_per INT; v_cid_mex INT; v_cid_chl INT; v_cid_cri INT;
-    v_prod INT; v_err TEXT;
-BEGIN
-    SELECT currency_id INTO v_cur_usd FROM currencies WHERE currency_code='USD';
-    SELECT exchange_rate_id INTO v_er_usd FROM exchange_rates WHERE currency_id=v_cur_usd AND base_currency_id=v_cur_usd ORDER BY rate_date DESC LIMIT 1;
-    SELECT warehouse_id INTO v_wh_disp FROM warehouses WHERE warehouse_name LIKE 'HUB-C%';
-    SELECT status_id INTO v_st_disp FROM import_statuses WHERE status_code='RECEIVED';
-    SELECT country_id INTO v_cid_col FROM countries WHERE iso_code='COL';
-    SELECT country_id INTO v_cid_per FROM countries WHERE iso_code='PER';
-    SELECT country_id INTO v_cid_mex FROM countries WHERE iso_code='MEX';
-    SELECT country_id INTO v_cid_chl FROM countries WHERE iso_code='CHL';
-    SELECT country_id INTO v_cid_cri FROM countries WHERE iso_code='CRI';
-
-    -- Colombia (ref order_id 1-8 de MySQL)
-    FOR v_prod IN (SELECT p.product_id FROM products p JOIN categories c ON p.category_id=c.category_id WHERE c.category_name='Aceites Esenciales' ORDER BY p.product_id LIMIT 5) LOOP
-        INSERT INTO dispatch_orders(reference_order_id,product_id,quantity,warehouse_id,destination_country_id,brand_label,packaging_permit_ok,unit_cost,currency_id,exchange_rate_id,dispatch_date,status_id)
-        VALUES(1,v_prod,50,v_wh_disp,v_cid_col,'Vivanatura/ZenAromatics',TRUE,12.50,v_cur_usd,v_er_usd,'2025-02-12 08:00:00',v_st_disp);
-    END LOOP;
-    -- Perú (ref order_id 9-14)
-    FOR v_prod IN (SELECT p.product_id FROM products p JOIN categories c ON p.category_id=c.category_id WHERE c.category_name IN ('Aceites Esenciales','Alimentos Funcionales') ORDER BY p.product_id LIMIT 5) LOOP
-        INSERT INTO dispatch_orders(reference_order_id,product_id,quantity,warehouse_id,destination_country_id,brand_label,packaging_permit_ok,unit_cost,currency_id,exchange_rate_id,dispatch_date,status_id)
-        VALUES(9,v_prod,40,v_wh_disp,v_cid_per,'Vivanatura/EcoVital',TRUE,11.00,v_cur_usd,v_er_usd,'2025-03-07 08:00:00',v_st_disp);
-    END LOOP;
-    -- México (ref order_id 15-19)
-    FOR v_prod IN (SELECT p.product_id FROM products p JOIN categories c ON p.category_id=c.category_id WHERE c.category_name IN ('Cosmética Dermatológica','Capilar') ORDER BY p.product_id LIMIT 5) LOOP
-        INSERT INTO dispatch_orders(reference_order_id,product_id,quantity,warehouse_id,destination_country_id,brand_label,packaging_permit_ok,unit_cost,currency_id,exchange_rate_id,dispatch_date,status_id)
-        VALUES(15,v_prod,60,v_wh_disp,v_cid_mex,'PuraDerma/HairElixir',TRUE,14.00,v_cur_usd,v_er_usd,'2025-03-17 08:00:00',v_st_disp);
-    END LOOP;
-    -- Chile (ref order_id 20-23)
-    FOR v_prod IN (SELECT p.product_id FROM products p JOIN categories c ON p.category_id=c.category_id WHERE c.category_name IN ('Cosmética Dermatológica','Jabones Artesanales') ORDER BY p.product_id LIMIT 5) LOOP
-        INSERT INTO dispatch_orders(reference_order_id,product_id,quantity,warehouse_id,destination_country_id,brand_label,packaging_permit_ok,unit_cost,currency_id,exchange_rate_id,dispatch_date,status_id)
-        VALUES(20,v_prod,35,v_wh_disp,v_cid_chl,'PuraDerma/EcoVital',TRUE,10.50,v_cur_usd,v_er_usd,'2025-04-03 08:00:00',v_st_disp);
-    END LOOP;
-    -- Costa Rica (ref order_id 24-27)
-    FOR v_prod IN (SELECT p.product_id FROM products p JOIN categories c ON p.category_id=c.category_id WHERE c.category_name IN ('Aromaterapia','Bebidas Naturales') ORDER BY p.product_id LIMIT 5) LOOP
-        INSERT INTO dispatch_orders(reference_order_id,product_id,quantity,warehouse_id,destination_country_id,brand_label,packaging_permit_ok,unit_cost,currency_id,exchange_rate_id,dispatch_date,status_id)
-        VALUES(24,v_prod,30,v_wh_disp,v_cid_cri,'ZenAromatics',TRUE,9.00,v_cur_usd,v_er_usd,'2025-04-12 08:00:00',v_st_disp);
-    END LOOP;
-    CALL sp_log('sp_insert_dispatch_orders','Despachos a 5 países','dispatch_orders',NULL,'SUCCESS');
-EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
-    CALL sp_log('sp_insert_dispatch_orders','Error despachos',NULL,NULL,'ERROR',v_err);
-    RAISE;
-END;$$;
-
--- =============================================================
--- SP 8 — Permisos sanitarios por producto y país destino
--- =============================================================
-CREATE OR REPLACE PROCEDURE sp_insert_permits()
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_cur_usd INT; v_er_usd INT; v_st_active INT;
-    v_pt_inv INT; v_pt_dig INT; v_pt_cof INT; v_pt_isp INT; v_pt_min INT;
-    v_cid_col INT; v_cid_per INT; v_cid_mex INT; v_cid_chl INT; v_cid_cri INT;
-    v_prod INT; v_counter INT := 0; v_err TEXT;
-BEGIN
-    SELECT currency_id INTO v_cur_usd FROM currencies WHERE currency_code='USD';
-    SELECT exchange_rate_id INTO v_er_usd FROM exchange_rates WHERE currency_id=v_cur_usd AND base_currency_id=v_cur_usd ORDER BY rate_date DESC LIMIT 1;
-    SELECT status_id INTO v_st_active FROM import_statuses WHERE status_code='ACTIVE';
-    SELECT permit_type_id INTO v_pt_inv FROM permit_types WHERE permit_type_code='INVIMA';
-    SELECT permit_type_id INTO v_pt_dig FROM permit_types WHERE permit_type_code='DIGEMID';
-    SELECT permit_type_id INTO v_pt_cof FROM permit_types WHERE permit_type_code='COFEPRIS';
-    SELECT permit_type_id INTO v_pt_isp FROM permit_types WHERE permit_type_code='ISP';
-    SELECT permit_type_id INTO v_pt_min FROM permit_types WHERE permit_type_code='MINSA_CRI';
-    SELECT country_id INTO v_cid_col FROM countries WHERE iso_code='COL';
-    SELECT country_id INTO v_cid_per FROM countries WHERE iso_code='PER';
-    SELECT country_id INTO v_cid_mex FROM countries WHERE iso_code='MEX';
-    SELECT country_id INTO v_cid_chl FROM countries WHERE iso_code='CHL';
-    SELECT country_id INTO v_cid_cri FROM countries WHERE iso_code='CRI';
-
-    FOR v_prod IN (SELECT product_id FROM products ORDER BY product_id) LOOP
-        INSERT INTO product_permits(product_id,destination_country_id,permit_type_id,permit_number,valid_from,valid_until,cost_amount,currency_id,exchange_rate_id,status_id)
-        VALUES(v_prod,v_cid_col,v_pt_inv,CONCAT('INV-2025-',LPAD(v_prod::TEXT,4,'0')),'2025-01-01','2027-12-31',150+(v_prod%5)*20,v_cur_usd,v_er_usd,v_st_active) ON CONFLICT(product_id,destination_country_id,permit_type_id) DO NOTHING;
-        INSERT INTO product_permits(product_id,destination_country_id,permit_type_id,permit_number,valid_from,valid_until,cost_amount,currency_id,exchange_rate_id,status_id)
-        VALUES(v_prod,v_cid_per,v_pt_dig,CONCAT('DIG-2025-',LPAD(v_prod::TEXT,4,'0')),'2025-01-01','2027-12-31',120+(v_prod%4)*15,v_cur_usd,v_er_usd,v_st_active) ON CONFLICT(product_id,destination_country_id,permit_type_id) DO NOTHING;
-        INSERT INTO product_permits(product_id,destination_country_id,permit_type_id,permit_number,valid_from,valid_until,cost_amount,currency_id,exchange_rate_id,status_id)
-        VALUES(v_prod,v_cid_mex,v_pt_cof,CONCAT('COF-2025-',LPAD(v_prod::TEXT,4,'0')),'2025-01-01','2027-12-31',180+(v_prod%6)*25,v_cur_usd,v_er_usd,v_st_active) ON CONFLICT(product_id,destination_country_id,permit_type_id) DO NOTHING;
-        INSERT INTO product_permits(product_id,destination_country_id,permit_type_id,permit_number,valid_from,valid_until,cost_amount,currency_id,exchange_rate_id,status_id)
-        VALUES(v_prod,v_cid_chl,v_pt_isp,CONCAT('ISP-2025-',LPAD(v_prod::TEXT,4,'0')),'2025-01-01','2027-12-31',130+(v_prod%5)*18,v_cur_usd,v_er_usd,v_st_active) ON CONFLICT(product_id,destination_country_id,permit_type_id) DO NOTHING;
-        INSERT INTO product_permits(product_id,destination_country_id,permit_type_id,permit_number,valid_from,valid_until,cost_amount,currency_id,exchange_rate_id,status_id)
-        VALUES(v_prod,v_cid_cri,v_pt_min,CONCAT('MIN-2025-',LPAD(v_prod::TEXT,4,'0')),'2025-01-01','2027-12-31',100+(v_prod%4)*12,v_cur_usd,v_er_usd,v_st_active) ON CONFLICT(product_id,destination_country_id,permit_type_id) DO NOTHING;
-        v_counter := v_counter + 1;
-    END LOOP;
-    CALL sp_log('sp_insert_permits',CONCAT(v_counter*5,' permisos en 5 países'),'product_permits',NULL,'SUCCESS');
+    CALL sp_log('sp_insert_permits',CONCAT(v_counter*5,' permisos en 5 países'),'product_permits',NULL,'SUCCESS',NULL);
 EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
     CALL sp_log('sp_insert_permits','Error permisos',NULL,NULL,'ERROR',v_err);
@@ -812,7 +707,8 @@ BEGIN
         INSERT INTO dispatch_orders(reference_order_id,product_id,quantity,warehouse_id,destination_country_id,brand_label,packaging_permit_ok,unit_cost,currency_id,exchange_rate_id,dispatch_date,status_id)
         VALUES(24,v_prod,30,v_wh_disp,v_cid_cri,'ZenAromatics',TRUE,9.00,v_cur_usd,v_er_usd,'2025-04-12 08:00:00',v_st_disp);
     END LOOP;
-    CALL sp_log('sp_insert_dispatch_orders','Despachos a 5 países','dispatch_orders',NULL,'SUCCESS');
+
+    CALL sp_log('sp_insert_dispatch_orders','Despachos a 5 países','dispatch_orders',NULL,'SUCCESS',NULL);
 EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
     CALL sp_log('sp_insert_dispatch_orders','Error despachos',NULL,NULL,'ERROR',v_err);
@@ -836,7 +732,7 @@ BEGIN
     CALL sp_insert_inventory();
     CALL sp_insert_permits();
     CALL sp_insert_dispatch_orders();
-    CALL sp_log('sp_load_all_data','Carga completa Etheria Global v3',NULL,NULL,'SUCCESS');
+    CALL sp_log('sp_load_all_data','Carga completa Etheria Global v3',NULL,NULL,'SUCCESS',NULL);
     RAISE NOTICE 'Carga Etheria Global v3 completada.';
 EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
@@ -844,4 +740,5 @@ EXCEPTION WHEN OTHERS THEN
     RAISE;
 END;$$;
 
+-- Ejecutar carga completa
 CALL sp_load_all_data();
