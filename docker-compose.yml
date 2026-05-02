@@ -3,36 +3,42 @@ services:
     image: postgres:16
     container_name: etheria_global_db
     environment:
-      POSTGRES_USER: etheria_user
       POSTGRES_DB: etheria_global_db
-      POSTGRES_HOST_AUTH_METHOD: trust
-    volumes:
-      - ./postgres:/docker-entrypoint-initdb.d
+      POSTGRES_USER: etheria_user
+      POSTGRES_PASSWORD: etheria_password
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U etheria_user -d etheria_global_db"]
       interval: 5s
       timeout: 5s
       retries: 5
+    ports:
+      - "5432:5432"
     networks:
-      - proyecto_network
+      - etheria_network
+    volumes:
+      - etheria_pg_data:/var/lib/postgresql/data
+      - ./postgres:/docker-entrypoint-initdb.d
 
   dynamic_brands_db:
     image: mysql:8.4
     container_name: dynamic_brands_db
     environment:
-      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      MYSQL_ROOT_PASSWORD: root_password
       MYSQL_DATABASE: dynamic_brands_db
       MYSQL_USER: dynamic_user
       MYSQL_PASSWORD: dynamic_password
-    volumes:
-      - ./mysql:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u dynamic_user --password=dynamic_password"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot_password"]
       interval: 5s
       timeout: 5s
       retries: 5
+    ports:
+      - "3306:3306"
     networks:
-      - proyecto_network
+      - etheria_network
+    volumes:
+      - dynamic_mysql_data:/var/lib/mysql
+      - ./mysql:/docker-entrypoint-initdb.d
 
   etl_runner:
     build: ./etl
@@ -43,19 +49,45 @@ services:
       dynamic_brands_db:
         condition: service_healthy
     networks:
-      - proyecto_network
+      - etheria_network
+    # Se ejecuta en cada 'docker compose up' para regenerar la tabla ETL
+    restart: "no"
 
-  dashboard:
-    build: ./dashboard
-    container_name: etheria_dashboard
+  admin:
+    build: ./admin
+    container_name: admin_panel
     ports:
-      - "5000:5000"
+      - "5001:5001"
     depends_on:
       etheria_global_db:
         condition: service_healthy
+      dynamic_brands_db:
+        condition: service_healthy
     networks:
-      - proyecto_network
+      - etheria_network
+    restart: always
+
+  metabase:
+    image: metabase/metabase:latest
+    container_name: metabase
+    ports:
+      - "3001:3000"
+    networks:
+      - etheria_network
+    restart: always
+    depends_on:
+      etheria_global_db:
+        condition: service_healthy
+    environment:
+      - MB_DB_FILE=/metabase-data/metabase.db
+    volumes:
+      - metabase_data:/metabase-data
 
 networks:
-  proyecto_network:
+  etheria_network:
     driver: bridge
+
+volumes:
+  etheria_pg_data:
+  dynamic_mysql_data:
+  metabase_data:

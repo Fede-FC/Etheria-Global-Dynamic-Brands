@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin — Etheria Global / Dynamic Brands</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,sans-serif;background:#f0f2f5;color:#1a1a2e}
+  header{background:#1a1a2e;color:#fff;padding:1rem 2rem;display:flex;justify-content:space-between;align-items:center}
+  header h1{font-size:1.3rem}
+  #status{font-size:.85rem;color:#a0aec0}
+  nav{background:#fff;border-bottom:1px solid #e2e8f0;display:flex;overflow-x:auto}
+  nav button{padding:.75rem 1.2rem;border:none;background:none;cursor:pointer;font-size:.9rem;white-space:nowrap;border-bottom:3px solid transparent}
+  nav button.active{border-bottom-color:#4f46e5;color:#4f46e5;font-weight:600}
+  main{max-width:1200px;margin:1.5rem auto;padding:0 1rem}
+  .tab{display:none}
+  .tab.active{display:block}
+  table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+  th{background:#f7f8fc;text-align:left;padding:.65rem .8rem;font-size:.8rem;text-transform:uppercase;color:#64748b}
+  td{padding:.6rem .8rem;border-top:1px solid #e2e8f0;font-size:.88rem}
+  tr:hover td{background:#f7f8fc}
+  .card{background:#fff;border-radius:8px;padding:1.2rem;margin-bottom:1rem;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+  .card h3{margin-bottom:.6rem;font-size:1rem}
+  .form-row{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem}
+  .form-row input,.form-row select{padding:.45rem .6rem;border:1px solid #cbd5e1;border-radius:4px;font-size:.85rem}
+  .btn{padding:.45rem 1rem;border:none;border-radius:4px;cursor:pointer;font-size:.82rem;font-weight:500}
+  .btn-primary{background:#4f46e5;color:#fff}
+  .btn-primary:hover{background:#4338ca}
+  .btn-sm{padding:.3rem .6rem;font-size:.78rem}
+  .btn-danger{background:#ef4444;color:#fff}
+  .btn-danger:hover{background:#dc2626}
+  .badge{display:inline-block;padding:.15rem .5rem;border-radius:99px;font-size:.75rem;font-weight:500}
+  .badge-green{background:#dcfce7;color:#166534}
+  .badge-red{background:#fee2e2;color:#991b1b}
+  .badge-gray{background:#f1f5f9;color:#475569}
+  .msg{padding:.5rem .8rem;border-radius:4px;margin:.5rem 0;font-size:.85rem;display:none}
+  .msg-ok{background:#dcfce7;color:#166534}
+  .msg-err{background:#fee2e2;color:#991b1b}
+</style>
+</head>
+<body>
+<header>
+  <h1>Etheria Global &middot; Admin</h1>
+  <div id="status">Cargando...</div>
+</header>
+
+<nav id="tabs">
+  <button class="active" data-tab="products">Productos</button>
+  <button data-tab="rates">Tipo de Cambio</button>
+  <button data-tab="orders">Órdenes</button>
+  <button data-tab="brands">Marcas</button>
+  <button data-tab="websites">Sitios Web</button>
+  <button data-tab="inventory">Inventario</button>
+  <button data-tab="etl">ETL Resumen</button>
+</nav>
+
+<main>
+<!-- ═══ PRODUCTOS ═══ -->
+<div id="products" class="tab active">
+  <div class="card">
+    <h3>Nuevo Producto</h3>
+    <div class="form-row">
+      <input id="p-name" placeholder="Nombre del producto" style="flex:2">
+      <select id="p-cat"></select>
+      <select id="p-unit"></select>
+      <button class="btn btn-primary" onclick="createProduct()">Crear</button>
+    </div>
+    <div id="p-msg" class="msg"></div>
+  </div>
+  <table><thead><tr><th>ID</th><th>Nombre</th><th>Categoría</th><th>Unidad</th><th>Estado</th><th>Acciones</th></tr></thead>
+  <tbody id="p-body"></tbody></table>
+</div>
+
+<!-- ═══ TIPO DE CAMBIO ═══ -->
+<div id="rates" class="tab">
+  <div class="card">
+    <h3>Nuevo Tipo de Cambio</h3>
+    <div class="form-row">
+      <select id="r-cur"></select>
+      <input id="r-rate" type="number" step="any" placeholder="Tasa" style="width:100px">
+      <input id="r-date" type="date">
+      <input id="r-source" placeholder="Fuente" style="width:120px">
+      <button class="btn btn-primary" onclick="createRate()">Guardar</button>
+    </div>
+    <div id="r-msg" class="msg"></div>
+  </div>
+  <table><thead><tr><th>Moneda</th><th>Base</th><th>Tasa</th><th>Fecha</th><th>Fuente</th></tr></thead>
+  <tbody id="r-body"></tbody></table>
+</div>
+
+<!-- ═══ ÓRDENES ═══ -->
+<div id="orders" class="tab">
+  <table><thead><tr><th>ID</th><th>Cliente</th><th>Sitio</th><th>Estado</th><th>Total (local)</th><th>Moneda</th><th>Total (base)</th><th>Fecha</th><th>Acción</th></tr></thead>
+  <tbody id="o-body"></tbody></table>
+</div>
+
+<!-- ═══ MARCAS ═══ -->
+<div id="brands" class="tab">
+  <table><thead><tr><th>ID</th><th>Marca</th><th>Enfoque</th><th>AI Model</th><th>Estado</th><th>Acciones</th></tr></thead>
+  <tbody id="b-body"></tbody></table>
+</div>
+
+<!-- ═══ SITIOS WEB ═══ -->
+<div id="websites" class="tab">
+  <table><thead><tr><th>ID</th><th>Marca</th><th>País</th><th>URL</th><th>Estado</th><th>Acción</th></tr></thead>
+  <tbody id="w-body"></tbody></table>
+</div>
+
+<!-- ═══ INVENTARIO ═══ -->
+<div id="inventory" class="tab">
+  <div class="card">
+    <h3>Ajustar Inventario</h3>
+    <div class="form-row">
+      <select id="i-wp"></select>
+      <input id="i-qty" type="number" placeholder="Cantidad (+/-)" style="width:110px">
+      <input id="i-notes" placeholder="Notas" style="width:150px">
+      <button class="btn btn-primary" onclick="adjustInventory()">Ajustar</button>
+    </div>
+    <div id="i-msg" class="msg"></div>
+  </div>
+  <table><thead><tr><th>ID</th><th>Producto</th><th>Marca</th><th>Sitio</th><th>Stock</th></tr></thead>
+  <tbody id="i-body"></tbody></table>
+</div>
+
+<!-- ═══ ETL RESUMEN ═══ -->
+<div id="etl" class="tab">
+  <table><thead><tr><th>Categoría</th><th>Marca</th><th>Sitio</th><th>País</th><th>Órdenes</th><th>Unidades</th><th>Revenue (base)</th><th>Costo Total</th><th>Margen</th><th>Margen %</th><th>ROI %</th></tr></thead>
+  <tbody id="e-body"></tbody></table>
+</div>
+</main>
+
+<script>
+const API = '';
+const $ = id => document.getElementById(id);
+
+function showMsg(elId, msg, ok=true){
+  const el = $(elId); el.textContent = msg; el.style.display='block';
+  el.className = 'msg ' + (ok ? 'msg-ok' : 'msg-err');
+  setTimeout(()=> el.style.display='none', 4000);
+}
+
+function badge(text, ok){
+  const cls = ok ? 'badge-green' : (ok === false ? 'badge-red' : 'badge-gray');
+  return `<span class="badge ${cls}">${text}</span>`;
+}
+
+// ── Tabs ──
+document.querySelectorAll('#tabs button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#tabs button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    $(btn.dataset.tab).classList.add('active');
+  });
+});
+
+// ── Status ──
+async function loadStatus(){
+  try{
+    const r = await fetch(API+'/api/status');
+    const d = await r.json();
+    $('status').textContent = d.ok
+      ? `PG: ${d.products_pg} productos · MY: ${d.brands_my} marcas, ${d.orders_my} órdenes · ETL: ${d.etl_rows} filas`
+      : 'Error de conexión';
+  } catch(e){ $('status').textContent = 'API no disponible'; }
+}
+
+// ── Products ──
+async function loadProducts(){
+  const [cats, units, rows] = await Promise.all([
+    fetch(API+'/api/categories').then(r=>r.json()),
+    fetch(API+'/api/units').then(r=>r.json()),
+    fetch(API+'/api/products').then(r=>r.json())
+  ]);
+  const catMap = {}; cats.forEach(c => catMap[c.category_id]=c.category_name);
+  const unitMap = {}; units.forEach(u => unitMap[u.unit_id]=u.unit_code);
+
+  $('p-cat').innerHTML = cats.map(c=>`<option value="${c.category_id}">${c.category_name}</option>`).join('');
+  $('p-unit').innerHTML = units.map(u=>`<option value="${u.unit_id}">${u.unit_code}</option>`).join('');
+
+  $('p-body').innerHTML = rows.map(p => `<tr>
+    <td>${p.product_id}</td><td>${p.product_name}</td><td>${p.category_name}</td>
+    <td>${p.unit_code}</td><td>${badge(p.enabled?'Activo':'Inactivo', p.enabled)}</td>
+    <td>
+      <button class="btn btn-sm btn-primary" onclick="toggleProduct(${p.product_id},${p.enabled})">${p.enabled?'Desactivar':'Activar'}</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteProduct(${p.product_id})">Eliminar</button>
+    </td>
+  </tr>`).join('');
+}
+
+async function createProduct(){
+  try{
+    const r = await fetch(API+'/api/products',{method:'POST',headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({product_name:$('p-name').value, category_id:+$('p-cat').value, unit_id:+$('p-unit').value})});
+    const d = await r.json();
+    if(d.ok){ showMsg('p-msg','Producto creado'); $('p-name').value=''; loadProducts(); loadStatus(); }
+    else showMsg('p-msg', d.error, false);
+  } catch(e){ showMsg('p-msg', e.message, false); }
+}
+
+async function toggleProduct(id, current){
+  await fetch(API+`/api/products/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({product_name:'x', enabled:!current})});
+  loadProducts();
+}
+
+async function deleteProduct(id){
+  if(!confirm('¿Desactivar este producto?')) return;
+  await fetch(API+`/api/products/${id}`,{method:'DELETE'});
+  loadProducts(); loadStatus();
+}
+
+// ── Exchange Rates ──
+async function loadRates(){
+  const rows = await fetch(API+'/api/exchange-rates').then(r=>r.json());
+  $('r-cur').innerHTML = '<option value="COP">COP</option><option value="CLP">CLP</option><option value="MXN">MXN</option><option value="PEN">PEN</option><option value="CRC">CRC</option>';
+  $('r-date').value = new Date().toISOString().split('T')[0];
+  $('r-body').innerHTML = rows.map(r=>`<tr><td>${r.currency}</td><td>${r.base_currency}</td><td>${r.rate}</td><td>${r.rate_date}</td><td>${r.source}</td></tr>`).join('');
+}
+
+async function createRate(){
+  try{
+    const r = await fetch(API+'/api/exchange-rates',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({currency_code:$('r-cur').value, rate:+$('r-rate').value, rate_date:$('r-date').value, source:$('r-source').value||'Manual'})});
+    const d = await r.json();
+    if(d.ok){ showMsg('r-msg','Tasa guardada'); loadRates(); }
+    else showMsg('r-msg', d.error, false);
+  } catch(e){ showMsg('r-msg', e.message, false); }
+}
+
+// ── Orders ──
+async function loadOrders(){
+  const rows = await fetch(API+'/api/orders').then(r=>r.json());
+  $('o-body').innerHTML = rows.map(o=>`<tr>
+    <td>${o.order_id}</td><td>${o.customer}</td><td>${o.site_url}</td><td>${o.status}</td>
+    <td>${o.total_amount_local?.toFixed(2)}</td><td>${o.currency_code}</td><td>${o.total_amount_base?.toFixed(2)}</td>
+    <td>${o.order_date}</td>
+    <td><select onchange="changeOrderStatus(${o.order_id},this.value)" style="font-size:.8rem">
+      <option value="">Cambiar estado...</option>
+      <option value="PENDING">Pending</option><option value="CONFIRMED">Confirmed</option>
+      <option value="SHIPPED">Shipped</option><option value="DELIVERED">Delivered</option>
+      <option value="CANCELLED">Cancelled</option>
+    </select></td>
+  </tr>`).join('');
+}
+
+async function changeOrderStatus(oid, code){
+  if(!code) return;
+  await fetch(API+`/api/orders/${oid}/status`,{method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({status_code:code})});
+  loadOrders();
+}
+
+// ── Brands ──
+async function loadBrands(){
+  const rows = await fetch(API+'/api/brands').then(r=>r.json());
+  $('b-body').innerHTML = rows.map(b=>`<tr>
+    <td>${b.brand_id}</td><td>${b.brand_name}</td><td>${b.focus_name}</td><td>${b.ai_model_version}</td>
+    <td>${badge(b.enabled?'Activa':'Inactiva', b.enabled)}</td>
+    <td><button class="btn btn-sm btn-primary" onclick="toggleBrand(${b.brand_id},${b.enabled})">${b.enabled?'Desactivar':'Activar'}</button></td>
+  </tr>`).join('');
+}
+
+async function toggleBrand(id, current){
+  await fetch(API+`/api/brands/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({brand_name:'x', enabled: current ? 0 : 1})});
+  loadBrands();
+}
+
+// ── Websites ──
+async function loadWebsites(){
+  const rows = await fetch(API+'/api/websites').then(r=>r.json());
+  $('w-body').innerHTML = rows.map(w=>`<tr>
+    <td>${w.website_id}</td><td>${w.brand_name}</td><td>${w.country_name}</td>
+    <td><a href="${w.site_url}" target="_blank" style="color:#4f46e5">${w.site_url}</a></td>
+    <td>${w.status}</td>
+    <td><button class="btn btn-sm btn-primary" onclick="toggleWebsite(${w.website_id})">Cambiar status</button></td>
+  </tr>`).join('');
+}
+
+async function toggleWebsite(id){
+  const newStatus = prompt('Nuevo estado (ACTIVE, MAINTENANCE, DISABLED):', 'ACTIVE');
+  if(!newStatus) return;
+  await fetch(API+`/api/websites/${id}/status`,{method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({status_code:newStatus})});
+  loadWebsites();
+}
+
+// ── Inventory ──
+async function loadInventory(){
+  const rows = await fetch(API+'/api/inventory').then(r=>r.json());
+  $('i-wp').innerHTML = rows.map(r=>`<option value="${r.website_product_id}">${r.branded_name} — ${r.site_url} (stock: ${r.stock_actual})</option>`).join('');
+  $('i-body').innerHTML = rows.map(r=>`<tr>
+    <td>${r.website_product_id}</td><td>${r.branded_name}</td><td>${r.brand_name}</td>
+    <td>${r.site_url}</td><td style="font-weight:600;color:${r.stock_actual<10?'#ef4444':'#166534'}">${r.stock_actual}</td>
+  </tr>`).join('');
+}
+
+async function adjustInventory(){
+  try{
+    const r = await fetch(API+'/api/inventory/adjust',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({website_product_id:+$('i-wp').value, quantity:+$('i-qty').value, notes:$('i-notes').value||'Ajuste manual'})});
+    const d = await r.json();
+    if(d.ok){ showMsg('i-msg','Inventario ajustado'); loadInventory(); }
+    else showMsg('i-msg', d.error, false);
+  } catch(e){ showMsg('i-msg', e.message, false); }
+}
+
+// ── ETL Summary ──
+async function loadETL(){
+  const rows = await fetch(API+'/api/etl-summary').then(r=>r.json());
+  $('e-body').innerHTML = rows.map(r=>`<tr>
+    <td>${r.category_name}</td><td>${r.brand_name}</td><td>${r.site_url}</td><td>${r.sale_country}</td>
+    <td>${r.total_orders}</td><td>${r.total_units_sold}</td><td>$${(r.revenue_base||0).toFixed(2)}</td>
+    <td>$${(r.cost_total||0).toFixed(2)}</td><td>$${(r.gross_margin||0).toFixed(2)}</td>
+    <td style="color:${r.gross_margin_pct>=0?'#166534':'#991b1b'}">${(r.gross_margin_pct||0).toFixed(1)}%</td>
+    <td style="color:${r.roi_pct>=0?'#166534':'#991b1b'}">${(r.roi_pct||0).toFixed(1)}%</td>
+  </tr>`).join('');
+}
+
+// ── Init ──
+loadStatus(); loadProducts(); loadRates(); loadOrders(); loadBrands(); loadWebsites(); loadInventory(); loadETL();
+setInterval(loadStatus, 10000);
+</script>
+</body>
+</html>
