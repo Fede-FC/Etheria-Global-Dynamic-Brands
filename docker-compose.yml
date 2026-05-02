@@ -81,7 +81,7 @@ services:
     environment:
       - MB_DB_FILE=/metabase-data/metabase.db
     volumes:
-      - metabase_data:/metabase-data
+      - ./metabase-data:/metabase-data
 
 networks:
   etheria_network:
@@ -90,4 +90,3 @@ networks:
 volumes:
   etheria_pg_data:
   dynamic_mysql_data:
-  metabase_data:
