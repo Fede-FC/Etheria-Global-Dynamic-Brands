@@ -1,9 +1,25 @@
 """
 Admin API — CRUD básico para modificar datos en tiempo real.
 Expone endpoints para que el formulario web interactúe con Postgres y MySQL.
+
+Cambios respecto a la versión original:
+  * /api/status y /api/etl-summary ahora consultan el esquema correcto
+    `analytics.etl_profitability_summary` (la tabla la crea el ETL en
+    el schema analytics, no en public).
+  * /api/orders devuelve los DECIMAL como float, así el front puede
+    usar toFixed sin romper el render.
+  * Nuevo POST /api/brands           (crear marca).
+  * Nuevo GET  /api/brand-focuses    (catálogo para el form de marcas).
+  * Nuevo POST /api/websites         (crear sitio web).
+  * Nuevo GET  /api/countries        (catálogo para sitios).
+  * Nuevo GET  /api/order-statuses   (catálogo de estados).
+  * Nuevo POST /api/inventory        (alta de Website_products).
+  * Nuevo GET  /api/product-catalog  (catálogo para alta de inventario).
 """
 from flask import Flask, jsonify, request, send_from_directory
 from sqlalchemy import create_engine, text
+from decimal import Decimal
+from datetime import date, datetime
 import os
 
 app = Flask(__name__)
@@ -11,16 +27,30 @@ app = Flask(__name__)
 PG = create_engine("postgresql://etheria_user:etheria_password@etheria_global_db:5432/etheria_global_db")
 MY = create_engine("mysql+pymysql://dynamic_user:dynamic_password@dynamic_brands_db:3306/dynamic_brands_db")
 
+
+def _to_jsonable(v):
+    """Convierte tipos no serializables (Decimal, date, datetime) a tipos JSON."""
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, (date, datetime)):
+        return v.isoformat()
+    return v
+
+
+def _row_to_dict(row):
+    return {k: _to_jsonable(v) for k, v in row._mapping.items()}
+
+
 def pg(sql, params=None):
     with PG.begin() as c:
         r = c.execute(text(sql), params or {})
-        try:    return [dict(row._mapping) for row in r]
+        try:    return [_row_to_dict(row) for row in r]
         except: return []
 
 def my(sql, params=None):
     with MY.begin() as c:
         r = c.execute(text(sql), params or {})
-        try:    return [dict(row._mapping) for row in r]
+        try:    return [_row_to_dict(row) for row in r]
         except: return []
 
 @app.route("/")
@@ -34,7 +64,11 @@ def status():
         p = pg("SELECT COUNT(*) AS n FROM products")[0]["n"]
         b = my("SELECT COUNT(*) AS n FROM Brands")[0]["n"]
         o = my("SELECT COUNT(*) AS n FROM Orders")[0]["n"]
-        s = pg("SELECT COUNT(*) AS n FROM etl_profitability_summary")[0]["n"]
+        # La tabla la crea el ETL en el schema analytics
+        try:
+            s = pg("SELECT COUNT(*) AS n FROM analytics.etl_profitability_summary")[0]["n"]
+        except Exception:
+            s = 0
         return jsonify({"products_pg": p, "brands_my": b, "orders_my": o, "etl_rows": s, "ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
@@ -154,6 +188,19 @@ def update_order_status(oid):
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 400
 
+# ── ESTADOS / FOCOS / PAÍSES (catálogos MySQL) ────────────────────────────────
+@app.route("/api/order-statuses")
+def get_order_statuses():
+    return jsonify(my("SELECT status_id, status_code FROM Order_statuses ORDER BY status_id"))
+
+@app.route("/api/brand-focuses")
+def get_brand_focuses():
+    return jsonify(my("SELECT focus_id, focus_name FROM Brand_focuses ORDER BY focus_name"))
+
+@app.route("/api/countries")
+def get_countries_my():
+    return jsonify(my("SELECT country_id, country_name, iso_code FROM Countries WHERE enabled=1 ORDER BY country_name"))
+
 # ── MARCAS (MySQL) ────────────────────────────────────────────────────────────
 @app.route("/api/brands", methods=["GET"])
 def get_brands():
@@ -163,6 +210,23 @@ def get_brands():
         FROM Brands b JOIN Brand_focuses bf ON b.focus_id=bf.focus_id
         ORDER BY b.brand_id
     """))
+
+@app.route("/api/brands", methods=["POST"])
+def create_brand():
+    """Alta de marca. Requiere brand_name y focus_id; ai_model_version es opcional."""
+    d = request.json or {}
+    try:
+        my("""
+            INSERT INTO Brands(brand_name, focus_id, ai_model_version, enabled)
+            VALUES (:name, :focus, :ai, 1)
+        """, {
+            "name":  d["brand_name"],
+            "focus": d["focus_id"],
+            "ai":    d.get("ai_model_version") or "manual"
+        })
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
 
 @app.route("/api/brands/<int:bid>", methods=["PUT"])
 def update_brand(bid):
@@ -187,6 +251,31 @@ def get_websites():
         ORDER BY w.website_id
     """))
 
+@app.route("/api/websites", methods=["POST"])
+def create_website():
+    """Alta de sitio web. brand_id, country_id, site_url son obligatorios."""
+    d = request.json or {}
+    try:
+        my("""
+            INSERT INTO Websites(brand_id, country_id, site_url, marketing_focus,
+                                 status_id, launch_date, enabled)
+            VALUES (:brand, :country, :url, :focus,
+                    COALESCE(
+                        (SELECT status_id FROM Order_statuses WHERE status_code=:status_code LIMIT 1),
+                        (SELECT status_id FROM Order_statuses WHERE status_code='ACTIVE' LIMIT 1)
+                    ),
+                    CURDATE(), 1)
+        """, {
+            "brand":   d["brand_id"],
+            "country": d["country_id"],
+            "url":     d["site_url"],
+            "focus":   d.get("marketing_focus", ""),
+            "status_code": d.get("status_code", "ACTIVE")
+        })
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
 @app.route("/api/websites/<int:wid>/status", methods=["PUT"])
 def toggle_website(wid):
     d = request.json
@@ -207,7 +296,7 @@ def get_inventory():
     return jsonify(my("""
         SELECT wp.website_product_id,
                pc.branded_name, b.brand_name, w.site_url,
-               SUM(im.quantity) AS stock_actual
+               COALESCE(SUM(im.quantity),0) AS stock_actual
         FROM Website_products wp
         JOIN Product_catalog pc ON wp.catalog_product_id = pc.catalog_product_id
         JOIN Brands b           ON pc.brand_id = b.brand_id
@@ -216,6 +305,35 @@ def get_inventory():
         GROUP BY wp.website_product_id, pc.branded_name, b.brand_name, w.site_url
         ORDER BY stock_actual ASC
     """))
+
+@app.route("/api/inventory", methods=["POST"])
+def create_inventory_item():
+    """Alta de Website_products: publica un producto del catálogo en un sitio.
+    Opcionalmente registra el stock inicial mediante un movimiento IN."""
+    d = request.json or {}
+    try:
+        r = my("""
+            INSERT INTO Website_products(website_id, catalog_product_id, is_featured, enabled)
+            VALUES (:web, :cat, :feat, 1)
+        """, {
+            "web":  d["website_id"],
+            "cat":  d["catalog_product_id"],
+            "feat": 1 if d.get("is_featured") else 0
+        })
+        # recuperar el id recién creado
+        new_id_row = my("SELECT LAST_INSERT_ID() AS id")
+        new_id = new_id_row[0]["id"] if new_id_row else None
+
+        initial = int(d.get("initial_stock") or 0)
+        if new_id and initial > 0:
+            my("""
+                INSERT INTO Inventory_movements(website_product_id, movement_type,
+                                                quantity, reference_type, notes)
+                VALUES (:wp, 'IN', :qty, 'MANUAL', :notes)
+            """, {"wp": new_id, "qty": initial, "notes": d.get("notes", "Stock inicial")})
+        return jsonify({"ok": True, "website_product_id": new_id})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
 
 @app.route("/api/inventory/adjust", methods=["POST"])
 def adjust_inventory():
@@ -233,11 +351,24 @@ def adjust_inventory():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 400
 
+# ── PRODUCT_CATALOG (MySQL) ───────────────────────────────────────────────────
+@app.route("/api/product-catalog")
+def get_product_catalog():
+    """Catálogo Brand×Producto, requerido para dar de alta inventario."""
+    return jsonify(my("""
+        SELECT pc.catalog_product_id, pc.branded_name, b.brand_name
+        FROM Product_catalog pc
+        JOIN Brands b ON pc.brand_id = b.brand_id
+        WHERE pc.enabled = 1
+        ORDER BY b.brand_name, pc.branded_name
+    """))
+
 # ── RESUMEN ETL ───────────────────────────────────────────────────────────────
 @app.route("/api/etl-summary", methods=["GET"])
 def etl_summary():
     try:
-        rows = pg("SELECT * FROM etl_profitability_summary ORDER BY revenue_base DESC")
+        # La tabla vive en el schema analytics, no en public
+        rows = pg("SELECT * FROM analytics.etl_profitability_summary ORDER BY revenue_base DESC")
         return jsonify(rows)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
